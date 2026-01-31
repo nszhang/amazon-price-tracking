@@ -31,19 +31,78 @@ export async function POST(request: NextRequest) {
     // Build the Amazon URL
     const amazonUrl = `https://www.amazon.${domain}/dp/${asin}`
 
-    // Fetch the product page
-    // Note: In production, you'd want to use a proxy service to avoid IP blocking
-    const response = await fetch(amazonUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
+    // Generate realistic browser headers to avoid detection
+    const getRealisticHeaders = () => {
+      const userAgents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
+      ]
+      const selectedUA = userAgents[Math.floor(Math.random() * userAgents.length)]
+
+      return {
+        'User-Agent': selectedUA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-CA,en-GB;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
-      },
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+        'DNT': '1',
+        'Referer': `https://www.amazon.${domain}/`,
+      }
+    }
+
+    // First, visit the Amazon home page to establish a session and get cookies
+    let cookieHeader = ''
+    try {
+      const homePageResponse = await fetch(`https://www.amazon.${domain}/`, {
+        headers: getRealisticHeaders(),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10000),
+      })
+
+      // Extract cookies from the response
+      const setCookieHeaders = homePageResponse.headers.getSetCookie()
+      if (setCookieHeaders.length > 0) {
+        cookieHeader = setCookieHeaders.map(c => c.split(';')[0]).join('; ')
+      }
+
+      // Add a small delay to mimic human behavior
+      await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1000))
+    } catch (error) {
+      console.warn('Failed to fetch home page for cookies, continuing without:', error)
+    }
+
+    // Add cookies to headers for the product page request
+    const productHeaders = getRealisticHeaders()
+    if (cookieHeader) {
+      productHeaders['Cookie'] = cookieHeader
+    }
+
+    // Fetch the product page
+    const response = await fetch(amazonUrl, {
+      headers: productHeaders,
+      redirect: 'follow',
       // Add a timeout to prevent hanging
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(15000),
     })
+
+    // Check if we got a CAPTCHA page
+    const responseText = await response.text()
+    if (responseText.includes('validateCaptcha') || responseText.includes('opfcaptcha')) {
+      console.error('Amazon CAPTCHA detected - scraping is being blocked')
+      return NextResponse.json(
+        { error: 'Amazon is blocking automated requests (CAPTCHA). Consider using PA-API or a paid scraping service.' },
+        { status: 429 }
+      )
+    }
 
     if (!response.ok) {
       return NextResponse.json(
@@ -52,7 +111,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const html = await response.text()
+    const html = responseText
 
     // Parse the HTML to extract product data
     // Note: Amazon's HTML structure changes frequently, so selectors may break
