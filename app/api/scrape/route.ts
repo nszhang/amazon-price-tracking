@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Add cookies to headers for the product page request
-    const productHeaders = getRealisticHeaders()
+    const productHeaders: Record<string, string> = getRealisticHeaders()
     if (cookieHeader) {
       productHeaders['Cookie'] = cookieHeader
     }
