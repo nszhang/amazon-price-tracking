@@ -1,6 +1,12 @@
 // Database and Application Type Definitions
 
-export type AmazonDomain = 'com' | 'co.uk' | 'de' | 'fr' | 'es' | 'it' | 'co.jp';
+export type AmazonDomain = 'ca' | 'com' | 'co.uk' | 'de' | 'fr' | 'es' | 'it' | 'co.jp';
+
+export interface AmazonDomainInfo {
+  value: AmazonDomain;
+  name: string;
+  flag: string;
+}
 export type AlertStatus = 'active' | 'triggered' | 'disabled';
 export type ScrapeStatus = 'pending' | 'success' | 'failed' | 'rate_limited';
 
@@ -103,6 +109,11 @@ export interface AddItemInput {
 }
 
 export interface UpdateItemInput {
+  title?: string;
+  image_url?: string;
+  brand?: string;
+  category?: string;
+  current_price?: number;
   alert_threshold?: number;
   alert_threshold_percent?: number;
   alert_enabled?: boolean;

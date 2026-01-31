@@ -3,8 +3,9 @@
 // Settings Page - User profile and preferences
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
+import { signOut } from 'next-auth/react'
 
 export default function SettingsPage() {
   const [email, setEmail] = useState('')
@@ -14,31 +15,28 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
+  const { data: session } = useSession()
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
-    fetchProfile()
-  }, [])
-
-  const fetchProfile = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
+    if (!session?.user) {
       router.push('/login')
       return
     }
+    fetchProfile()
+  }, [session])
 
-    setEmail(user.email || '')
-
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single()
-
-    if (data) {
-      setFullName(data.full_name || '')
-      setAlertEmail(data.alert_email || '')
+  const fetchProfile = async () => {
+    try {
+      const res = await fetch('/api/user/profile')
+      if (res.ok) {
+        const json = await res.json()
+        setEmail(json.data.email || '')
+        setFullName(json.data.full_name || '')
+        setAlertEmail(json.data.alert_email || '')
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error)
     }
     setLoading(false)
   }
@@ -48,28 +46,31 @@ export default function SettingsPage() {
     setSaving(true)
     setMessage('')
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        full_name: fullName,
-        alert_email: alertEmail || null,
+    try {
+      const res = await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          full_name: fullName,
+          alert_email: alertEmail || null,
+        }),
       })
-      .eq('id', user.id)
 
-    if (error) {
-      setMessage('Error saving profile: ' + error.message)
-    } else {
-      setMessage('Profile saved successfully!')
+      if (res.ok) {
+        setMessage('Profile saved successfully!')
+      } else {
+        const data = await res.json()
+        setMessage('Error saving profile: ' + (data.error || 'Unknown error'))
+      }
+    } catch (error) {
+      setMessage('Error saving profile: ' + (error as any).message)
     }
+
     setSaving(false)
   }
 
-  const signOut = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
+  const handleSignOut = async () => {
+    await signOut({ callbackUrl: '/login' })
   }
 
   if (loading) {
@@ -144,7 +145,7 @@ export default function SettingsPage() {
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Danger Zone</h3>
           <button
-            onClick={signOut}
+            onClick={handleSignOut}
             className="px-4 py-2 border border-red-300 text-red-700 rounded-md hover:bg-red-50"
           >
             Sign Out

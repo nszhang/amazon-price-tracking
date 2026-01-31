@@ -1,22 +1,54 @@
-// Next.js Middleware
-// This runs before every request to handle auth state
+// Next.js Middleware with NextAuth
+// Replaces Supabase middleware for self-hosted setup
 
-import { type NextRequest } from 'next/server'
-import { updateSession } from '@/lib/supabase/middleware'
+import { withAuth } from 'next-auth/middleware'
+import { NextResponse } from 'next/server'
 
-export async function middleware(request: NextRequest) {
-  return await updateSession(request)
-}
+export default withAuth(
+  function middleware(req) {
+    // Add user info to headers for server components
+    const requestHeaders = new Headers(req.headers)
+    if (req.nextauth.token?.id) {
+      requestHeaders.set('x-user-id', req.nextauth.token.id as string)
+    }
+
+    // Add Content-Security-Policy to upgrade insecure requests
+    const response = NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    })
+
+    // Set CSP header to upgrade HTTP to HTTPS for images
+    response.headers.set(
+      'Content-Security-Policy',
+      "upgrade-insecure-requests"
+    )
+
+    return response
+  },
+  {
+    callbacks: {
+      authorized({ req, token }) {
+        // Protect dashboard routes
+        if (req.nextUrl.pathname.startsWith('/items') ||
+            req.nextUrl.pathname.startsWith('/alerts') ||
+            req.nextUrl.pathname.startsWith('/settings')) {
+          return token !== null
+        }
+        return true
+      },
+    },
+    pages: {
+      signIn: '/login',
+    },
+  }
+)
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * Feel free to modify this pattern to include more paths.
-     */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/items/:path*',
+    '/alerts/:path*',
+    '/settings/:path*',
   ],
 }

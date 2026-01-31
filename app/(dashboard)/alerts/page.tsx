@@ -3,7 +3,7 @@
 // Alerts Page - View and manage price drop alerts
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useSession } from 'next-auth/react'
 
 interface Alert {
   id: number
@@ -14,49 +14,54 @@ interface Alert {
   status: 'active' | 'triggered' | 'disabled'
   triggered_at: string
   acknowledged_at?: string
-  tracked_items: {
-    title: string
-    asin: string
-    amazon_url: string
-    image_url?: string
-  }
+  item_title: string
+  item_asin: string
+  item_url: string
+  image_url?: string
 }
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [loading, setLoading] = useState(true)
-  const supabase = createClient()
+  const { data: session } = useSession()
 
   useEffect(() => {
     fetchAlerts()
-  }, [])
+  }, [session])
 
   const fetchAlerts = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    if (!(session?.user as any)?.id) {
+      setLoading(false)
+      return
+    }
 
-    const { data } = await supabase
-      .from('price_alerts')
-      .select('*, tracked_items(*)')
-      .eq('user_id', user.id)
-      .order('triggered_at', { ascending: false })
-
-    if (data) {
-      setAlerts(data as Alert[])
+    try {
+      const res = await fetch('/api/alerts')
+      if (res.ok) {
+        const json = await res.json()
+        setAlerts(json.data || [])
+      }
+    } catch (error) {
+      console.error('Error fetching alerts:', error)
     }
     setLoading(false)
   }
 
   const acknowledgeAlert = async (alertId: number) => {
-    const { error } = await supabase
-      .from('price_alerts')
-      .update({ status: 'triggered', acknowledged_at: new Date().toISOString() })
-      .eq('id', alertId)
+    try {
+      const res = await fetch('/api/alerts/acknowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alertId })
+      })
 
-    if (!error) {
-      setAlerts(alerts.map(a =>
-        a.id === alertId ? { ...a, status: 'triggered' as const, acknowledged_at: new Date().toISOString() } : a
-      ))
+      if (res.ok) {
+        setAlerts(alerts.map(a =>
+          a.id === alertId ? { ...a, status: 'triggered' as const, acknowledged_at: new Date().toISOString() } : a
+        ))
+      }
+    } catch (error) {
+      console.error('Error acknowledging alert:', error)
     }
   }
 
@@ -107,12 +112,12 @@ export default function AlertsPage() {
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3">
-                          {alert.tracked_items.image_url && (
-                            <img src={alert.tracked_items.image_url} alt="" className="w-16 h-16 object-cover rounded" />
+                          {alert.image_url && (
+                            <img src={alert.image_url} alt="" className="w-16 h-16 object-cover rounded" />
                           )}
                           <div>
-                            <h4 className="font-medium text-gray-900">{alert.tracked_items.title}</h4>
-                            <p className="text-sm text-gray-500">{alert.tracked_items.asin}</p>
+                            <h4 className="font-medium text-gray-900">{alert.item_title}</h4>
+                            <p className="text-sm text-gray-500">{alert.item_asin}</p>
                           </div>
                         </div>
                         <div className="mt-4 flex items-center gap-6">
@@ -141,7 +146,7 @@ export default function AlertsPage() {
                       </div>
                       <div className="flex flex-col gap-2">
                         <a
-                          href={alert.tracked_items.amazon_url}
+                          href={alert.item_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
@@ -171,7 +176,7 @@ export default function AlertsPage() {
                   <div key={alert.id} className="bg-white rounded-lg shadow p-4 opacity-75">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-medium text-gray-700">{alert.tracked_items.title}</p>
+                        <p className="font-medium text-gray-700">{alert.item_title}</p>
                         <p className="text-sm text-gray-500">
                           Dropped to ${alert.actual_price.toFixed(2)} (was ${alert.previous_price?.toFixed(2)})
                         </p>

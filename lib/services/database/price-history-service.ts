@@ -1,6 +1,7 @@
 // Price History Service - Database operations for price history
+// Replaces Supabase with raw PostgreSQL queries
 
-import { createClient } from '@/lib/supabase/server'
+import { query } from '@/lib/db/config'
 import type { PriceHistory } from '@/lib/types'
 
 export class PriceHistoryService {
@@ -11,56 +12,53 @@ export class PriceHistoryService {
     itemId: number,
     days: number = 30
   ): Promise<PriceHistory[]> {
-    const supabase = createClient()
     const since = new Date()
     since.setDate(since.getDate() - days)
 
-    const { data, error } = await supabase
-      .from('price_history')
-      .select('*')
-      .eq('item_id', itemId)
-      .gte('scraped_at', since.toISOString())
-      .order('scraped_at', { ascending: false })
+    const result = await query(
+      `SELECT id, item_id, price, currency, in_stock, scrape_status, error_message, scraped_at
+       FROM price_history
+       WHERE item_id = $1 AND scraped_at >= $2
+       ORDER BY scraped_at DESC`,
+      [itemId, since.toISOString()]
+    )
 
-    if (error) throw error
-    return (data || []) as PriceHistory[]
+    return result.rows.map(row => this.mapRowToHistory(row))
   }
 
   /**
    * Get all price history for an item (no time limit)
    */
   static async getItemHistoryAll(itemId: number): Promise<PriceHistory[]> {
-    const supabase = createClient()
-    const { data, error } = await supabase
-      .from('price_history')
-      .select('*')
-      .eq('item_id', itemId)
-      .order('scraped_at', { ascending: false })
+    const result = await query(
+      `SELECT id, item_id, price, currency, in_stock, scrape_status, error_message, scraped_at
+       FROM price_history
+       WHERE item_id = $1
+       ORDER BY scraped_at DESC`,
+      [itemId]
+    )
 
-    if (error) throw error
-    return (data || []) as PriceHistory[]
+    return result.rows.map(row => this.mapRowToHistory(row))
   }
 
   /**
    * Get latest price for an item
    */
   static async getLatestPrice(itemId: number): Promise<PriceHistory | null> {
-    const supabase = createClient()
-    const { data, error } = await supabase
-      .from('price_history')
-      .select('*')
-      .eq('item_id', itemId)
-      .eq('scrape_status', 'success')
-      .order('scraped_at', { ascending: false })
-      .limit(1)
-      .single()
+    const result = await query(
+      `SELECT id, item_id, price, currency, in_stock, scrape_status, error_message, scraped_at
+       FROM price_history
+       WHERE item_id = $1 AND scrape_status = 'success'
+       ORDER BY scraped_at DESC
+       LIMIT 1`,
+      [itemId]
+    )
 
-    if (error) {
-      if (error.code === 'PGRST116') return null
-      throw error
+    if (result.rows.length === 0) {
+      return null
     }
 
-    return data as PriceHistory
+    return this.mapRowToHistory(result.rows[0])
   }
 
   /**
@@ -70,18 +68,27 @@ export class PriceHistoryService {
     itemId: number,
     days: number = 30
   ): Promise<{ min: number; max: number; avg: number } | null> {
-    const history = await this.getItemHistory(itemId, days)
+    const since = new Date()
+    since.setDate(since.getDate() - days)
 
-    if (history.length === 0) return null
+    const result = await query(
+      `SELECT 
+        MIN(price) as min_price,
+        MAX(price) as max_price,
+        AVG(price) as avg_price
+       FROM price_history
+       WHERE item_id = $1 AND scraped_at >= $2 AND price > 0`,
+      [itemId, since.toISOString()]
+    )
 
-    const prices = history.map(h => h.price).filter(p => p > 0)
-
-    if (prices.length === 0) return null
+    if (result.rows.length === 0 || result.rows[0].min_price === null) {
+      return null
+    }
 
     return {
-      min: Math.min(...prices),
-      max: Math.max(...prices),
-      avg: prices.reduce((a, b) => a + b, 0) / prices.length,
+      min: parseFloat(result.rows[0].min_price),
+      max: parseFloat(result.rows[0].max_price),
+      avg: parseFloat(result.rows[0].avg_price),
     }
   }
 
@@ -96,49 +103,66 @@ export class PriceHistoryService {
     scrape_status?: 'pending' | 'success' | 'failed' | 'rate_limited'
     error_message?: string
   }): Promise<PriceHistory> {
-    const supabase = createClient()
-    const { entryData, error } = await supabase
-      .from('price_history')
-      .insert(data)
-      .select()
-      .single()
+    const result = await query(
+      `INSERT INTO price_history (item_id, price, currency, in_stock, scrape_status, error_message)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [
+        data.item_id,
+        data.price,
+        data.currency || 'USD',
+        data.in_stock ?? true,
+        data.scrape_status || 'success',
+        data.error_message || null
+      ]
+    )
 
-    if (error) throw error
-    return entryData as PriceHistory
+    return this.mapRowToHistory(result.rows[0])
   }
 
   /**
    * Get failed scrape attempts
    */
   static async getFailedScrapes(itemId: number, limit: number = 10): Promise<PriceHistory[]> {
-    const supabase = createClient()
-    const { data, error } = await supabase
-      .from('price_history')
-      .select('*')
-      .eq('item_id', itemId)
-      .not('scrape_status', 'eq', 'success')
-      .order('scraped_at', { ascending: false })
-      .limit(limit)
+    const result = await query(
+      `SELECT id, item_id, price, currency, in_stock, scrape_status, error_message, scraped_at
+       FROM price_history
+       WHERE item_id = $1 AND scrape_status != 'success'
+       ORDER BY scraped_at DESC
+       LIMIT $2`,
+      [itemId, limit]
+    )
 
-    if (error) throw error
-    return (data || []) as PriceHistory[]
+    return result.rows.map(row => this.mapRowToHistory(row))
   }
 
   /**
    * Clean up old price history (for maintenance)
    */
   static async cleanupOldHistory(daysToKeep: number = 365): Promise<number> {
-    const supabase = createClient()
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - daysToKeep)
 
-    const { data, error } = await supabase
-      .from('price_history')
-      .delete()
-      .lt('scraped_at', cutoff.toISOString())
-      .select()
+    const result = await query(
+      `DELETE FROM price_history 
+       WHERE scraped_at < $1
+       RETURNING id`,
+      [cutoff.toISOString()]
+    )
 
-    if (error) throw error
-    return (data || []).length
+    return result.rows.length
+  }
+
+  private static mapRowToHistory(row: any): PriceHistory {
+    return {
+      id: row.id,
+      item_id: row.item_id,
+      price: parseFloat(row.price),
+      currency: row.currency,
+      in_stock: row.in_stock,
+      scrape_status: row.scrape_status,
+      error_message: row.error_message,
+      scraped_at: row.scraped_at?.toISOString(),
+    }
   }
 }

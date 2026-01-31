@@ -2,7 +2,10 @@
 // This endpoint performs server-side scraping of Amazon products
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '@/lib/auth/config'
+import { ItemsService } from '@/lib/services/database/items-service'
+import { PriceHistoryService } from '@/lib/services/database/price-history-service'
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,10 +19,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Check authentication
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const session = await getServerSession(authOptions)
 
-    if (!user) {
+    if (!session?.user?.id) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -27,7 +29,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Build the Amazon URL
-    const amazonUrl = `https://www.amazon.${domain || 'com'}/dp/${asin}`
+    const amazonUrl = `https://www.amazon.${domain}/dp/${asin}`
 
     // Fetch the product page
     // Note: In production, you'd want to use a proxy service to avoid IP blocking
@@ -89,7 +91,7 @@ export async function POST(request: NextRequest) {
 
       // Availability
       const availabilityMatch = html.match(/<span id="availability"[^>]*>(.+?)<\/span>/s)
-      const availabilityText = availabilityMatch ? availability[1].replace(/<[^>]+>/g, '').trim().toLowerCase() : ''
+      const availabilityText = availabilityMatch ? availabilityMatch[1].replace(/<[^>]+>/g, '').trim().toLowerCase() : ''
       const inStock = !availabilityText.includes('unavailable') && !availabilityText.includes('currently unavailable')
 
       return {
@@ -100,42 +102,44 @@ export async function POST(request: NextRequest) {
         image_url: image,
         brand,
         category: null,
-        in_stock,
+        inStock,
       }
     }
 
     const product = extractProductData(html)
 
-    // Update the item in the database
-    const { error: updateError } = await supabase
-      .from('tracked_items')
-      .update({
-        title: product.title,
-        current_price: product.price,
-        image_url: product.image_url,
-        brand: product.brand,
-        in_stock: product.in_stock,
-        last_checked_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('asin', asin)
-      .eq('user_id', user.id)
-
-    if (updateError) {
-      console.error('Error updating item:', updateError)
+    // Convert Amazon HTTP URLs to HTTPS to avoid mixed content
+    const secureProduct = {
+      ...product,
+      image_url: product.image_url ? product.image_url.replace(/^http:/, 'https:') : undefined,
     }
 
-    // Add to price history
-    await supabase
-      .from('price_history')
-      .insert({
-        item_id: asin, // This should be the actual item_id
-        price: product.price,
-        in_stock: product.in_stock,
-        scrape_status: 'success',
-      })
+    // Get the item first to find its ID
+    const item = await ItemsService.getItemByAsin(asin, session.user.id)
+    if (!item) {
+      return NextResponse.json(
+        { error: 'Item not found' },
+        { status: 404 }
+      )
+    }
 
-    return NextResponse.json({ product })
+    // Update the item in the database
+    await ItemsService.updateItem(item.id, session.user.id, {
+      title: secureProduct.title,
+      current_price: secureProduct.price,
+      image_url: secureProduct.image_url,
+      brand: secureProduct.brand,
+    } as any)
+
+    // Add to price history
+    await PriceHistoryService.addPriceEntry({
+      item_id: item.id,
+      price: secureProduct.price,
+      in_stock: secureProduct.inStock,
+      scrape_status: 'success',
+    })
+
+    return NextResponse.json({ product: secureProduct })
   } catch (error: any) {
     console.error('Scraping error:', error)
 

@@ -3,9 +3,7 @@
 
 import { BaseScraper } from './base-scraper'
 import { AmazonScraper } from './amazon-scraper'
-
-// Future: Import AmazonAPIService when ready
-// import { AmazonAPIService } from './amazon-api-service'
+import { RainforestAPIService } from './rainforest-api-service'
 
 export enum ScraperType {
   WEB_SCRAPER = 'web_scraper',
@@ -30,15 +28,16 @@ export class ScraperFactory {
     // Create new instance based on type
     switch (scraperType) {
       case ScraperType.API:
-        // Future: Use API service when API key is available
-        // const apiKey = process.env.AMAZON_API_KEY
-        // if (apiKey) {
-        //   this.instance = new AmazonAPIService(apiKey)
-        //   this.currentType = ScraperType.API
-        //   break
-        // }
+        // Use Rainforest API when API key is available
+        const apiKey = process.env.RAINFOREST_API_KEY
+        if (apiKey) {
+          this.instance = new RainforestAPIService(apiKey)
+          this.currentType = ScraperType.API
+          console.log('Using Rainforest API for product data')
+          break
+        }
         // Fall back to web scraper if no API key
-        console.warn('Amazon API key not found, falling back to web scraper')
+        console.warn('RAINFOREST_API_KEY not found, falling back to web scraper')
         this.instance = new AmazonScraper()
         this.currentType = ScraperType.WEB_SCRAPER
         break

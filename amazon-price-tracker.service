@@ -1,0 +1,21 @@
+[Unit]
+Description=Amazon Price Tracker
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=nzhang
+Group=nzhang
+WorkingDirectory=/home/nzhang/amazon-price-tracking
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/home/nzhang/amazon-price-tracking/.env.local
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=amazon-price-tracker
+
+[Install]
+WantedBy=multi-user.target

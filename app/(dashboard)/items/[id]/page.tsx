@@ -4,7 +4,6 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { PriceChart } from '@/components/charts/PriceChart'
 import type { TrackedItem, PriceHistory } from '@/lib/types'
 import { formatPrice, formatDistanceToNow } from '@/lib/utils/formatters'
@@ -12,7 +11,6 @@ import { formatPrice, formatDistanceToNow } from '@/lib/utils/formatters'
 export default function ItemDetailsPage() {
   const params = useParams()
   const router = useRouter()
-  const supabase = createClient()
 
   const [item, setItem] = useState<TrackedItem | null>(null)
   const [history, setHistory] = useState<PriceHistory[]>([])
@@ -25,32 +23,27 @@ export default function ItemDetailsPage() {
   }, [params.id])
 
   const fetchItemDetails = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { data } = await supabase
-      .from('tracked_items')
-      .select('*')
-      .eq('id', params.id)
-      .eq('user_id', user.id)
-      .single()
-
-    if (data) {
-      setItem(data as TrackedItem)
+    try {
+      const res = await fetch(`/api/items/${params.id}`)
+      if (res.ok) {
+        const json = await res.json()
+        setItem(json.data)
+      }
+    } catch (error) {
+      console.error('Error fetching item:', error)
     }
     setLoading(false)
   }
 
   const fetchPriceHistory = async () => {
-    const { data, error } = await supabase
-      .from('price_history')
-      .select('*')
-      .eq('item_id', params.id)
-      .order('scraped_at', { ascending: false })
-      .limit(100)
-
-    if (data) {
-      setHistory(data as PriceHistory[])
+    try {
+      const res = await fetch(`/api/items/${params.id}/history`)
+      if (res.ok) {
+        const json = await res.json()
+        setHistory(json.data || [])
+      }
+    } catch (error) {
+      console.error('Error fetching price history:', error)
     }
   }
 
@@ -82,24 +75,42 @@ export default function ItemDetailsPage() {
   const deleteItem = async () => {
     if (!confirm('Are you sure you want to stop tracking this item?')) return
 
-    const { error } = await supabase
-      .from('tracked_items')
-      .delete()
-      .eq('id', params.id)
-
-    if (!error) {
-      router.push('/dashboard/items')
+    try {
+      const res = await fetch(`/api/items/${params.id}`, {
+        method: 'DELETE'
+      })
+      if (res.ok) {
+        router.push('/items')
+      }
+    } catch (error) {
+      console.error('Failed to delete item:', error)
     }
   }
 
   const updateAlertThreshold = async (newThreshold: number) => {
-    const { error } = await supabase
-      .from('tracked_items')
-      .update({ alert_threshold: newThreshold })
-      .eq('id', params.id)
+    try {
+      const res = await fetch(`/api/items/${params.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alert_threshold: newThreshold })
+      })
+      if (res.ok) {
+        fetchItemDetails()
+      }
+    } catch (error) {
+      console.error('Failed to update threshold:', error)
+    }
+  }
 
-    if (!error) {
-      fetchItemDetails()
+  const updateNotes = async (notes: string) => {
+    try {
+      await fetch(`/api/items/${params.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes })
+      })
+    } catch (error) {
+      console.error('Failed to update notes:', error)
     }
   }
 
@@ -137,7 +148,7 @@ export default function ItemDetailsPage() {
         <div className="flex gap-6">
           {item.image_url && (
             <img
-              src={item.image_url}
+              src={item.image_url.replace(/^http:/, 'https:')}
               alt={item.title}
               className="w-48 h-48 object-cover rounded-lg"
             />
@@ -225,7 +236,7 @@ export default function ItemDetailsPage() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Notes</h2>
         <textarea
           value={item.notes || ''}
-          onChange={(e) => supabase.from('tracked_items').update({ notes: e.target.value }).eq('id', item.id)}
+          onChange={(e) => updateNotes(e.target.value)}
           placeholder="Add notes about this item..."
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
           rows={3}
