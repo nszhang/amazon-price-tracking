@@ -124,32 +124,35 @@ export async function POST(request: NextRequest) {
       // Amazon pages have multiple prices (original, other sellers, etc.), so we need specific patterns
       let price = 0
 
-      // Pattern 1: Price inside buy box (most reliable for current price)
-      // This looks for the price within the #centerCol or #buybox section
-      const buyBoxPriceMatch = html.match(/<span[^>]*id=["']priceblock_dealprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-      if (buyBoxPriceMatch) {
-        price = parseFloat(buyBoxPriceMatch[1].replace(/,/g, ''))
-      }
-
-      // Pattern 2: Price from #priceblock_ourprice (regular price, no deal)
-      if (price === 0) {
-        const ourPriceMatch = html.match(/<span[^>]*id=["']priceblock_ourprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-        if (ourPriceMatch) {
-          price = parseFloat(ourPriceMatch[1].replace(/,/g, ''))
-        }
-      }
-
-      // Pattern 3: Twister price (for products with size/color options)
-      if (price === 0) {
-        const twisterPriceMatch = html.match(/<span[^>]*id=["']twister[^>]*class=["']a-price-whole["'][^>]*>(\d+[\d,]*)<\/span>/s)
+      // Pattern 1: Twister price (most reliable - used for products with size/color options)
+      // This is the primary price display on most Amazon product pages
+      const twisterSectionMatch = html.match(/id=["']twister[^"']*["'][^>]*>(.{10,5000})/s)
+      if (twisterSectionMatch) {
+        const twisterPriceMatch = twisterSectionMatch[1].match(/<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (twisterPriceMatch) {
           price = parseFloat(twisterPriceMatch[1].replace(/,/g, ''))
         }
       }
 
+      // Pattern 2: Price from #priceblock_dealprice (deal/promo price)
+      if (price === 0) {
+        const dealPriceMatch = html.match(/id=["']priceblock_dealprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        if (dealPriceMatch) {
+          price = parseFloat(dealPriceMatch[1].replace(/,/g, ''))
+        }
+      }
+
+      // Pattern 3: Price from #priceblock_ourprice (regular price, no deal)
+      if (price === 0) {
+        const ourPriceMatch = html.match(/id=["']priceblock_ourprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        if (ourPriceMatch) {
+          price = parseFloat(ourPriceMatch[1].replace(/,/g, ''))
+        }
+      }
+
       // Pattern 4: Android price block (used on mobile)
       if (price === 0) {
-        const androidPriceMatch = html.match(/<span[^>]*id=["']android-buybox-price[^>]*>.*?class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        const androidPriceMatch = html.match(/id=["']android-buybox-price["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (androidPriceMatch) {
           price = parseFloat(androidPriceMatch[1].replace(/,/g, ''))
         }
@@ -157,15 +160,15 @@ export async function POST(request: NextRequest) {
 
       // Pattern 5: Inside #priceblock_saleprice (for sale items)
       if (price === 0) {
-        const salePriceMatch = html.match(/<span[^>]*id=["']priceblock_saleprice[^>]*>.*?class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        const salePriceMatch = html.match(/id=["']priceblock_saleprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (salePriceMatch) {
           price = parseFloat(salePriceMatch[1].replace(/,/g, ''))
         }
       }
 
-      // Pattern 6: Price from #apexOfferDisplay (for Amazon Prime exclusive pricing)
+      // Pattern 6: apex-price-to-pay (alternative price display)
       if (price === 0) {
-        const apexPriceMatch = html.match(/<span[^>]*id=["']apexOfferDisplay[^>]*>.*?class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        const apexPriceMatch = html.match(/class=["']apex-price-to-pay[^"']*["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (apexPriceMatch) {
           price = parseFloat(apexPriceMatch[1].replace(/,/g, ''))
         }
@@ -181,13 +184,23 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Pattern 8: Last resort - any a-offscreen price (least reliable)
+      // Pattern 7: Fallback - look for a-price-whole followed by a-price-fraction within buybox section
       if (price === 0) {
-        const offscreenMatch = html.match(/<span[^>]*class=["']a-offscreen["'][^>]*aria-hidden=["']true["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/s)
+        const priceSectionMatch = html.match(/<div[^>]*id=["']buybox[^>]*>.*?<span[^>]*class=["']a-price-whole["'][^>]*>(\d+[\d,]*)<\/span><span[^>]*class=["']a-price-fraction["'][^>]*>(\d+)<\/span>/s)
+        if (priceSectionMatch) {
+          const wholePart = parseFloat(priceSectionMatch[1].replace(/,/g, ''))
+          const fractionPart = parseFloat(`0.${priceSectionMatch[2]}`)
+          price = wholePart + fractionPart
+        }
+      }
+
+      // Pattern 8: Last resort - first a-offscreen price with sanity check
+      if (price === 0) {
+        const offscreenMatch = html.match(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/s)
         if (offscreenMatch) {
           const extractedPrice = parseFloat(offscreenMatch[1].replace(/,/g, ''))
-          // Sanity check: reject obviously wrong prices (like 1 cent or over $10,000)
-          if (extractedPrice > 0.01 && extractedPrice < 10000) {
+          // Sanity check: reject obviously wrong prices (under $1 or over $10,000)
+          if (extractedPrice >= 1 && extractedPrice < 10000) {
             price = extractedPrice
           }
         }
