@@ -123,21 +123,32 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Update the item in the database
-    await ItemsService.updateItem(item.id, session.user.id, {
+    // Only update price if we successfully extracted it (not 0)
+    const updateData: any = {
       title: secureProduct.title,
-      current_price: secureProduct.price,
       image_url: secureProduct.image_url,
       brand: secureProduct.brand,
-    } as any)
+    }
 
-    // Add to price history
-    await PriceHistoryService.addPriceEntry({
-      item_id: item.id,
-      price: secureProduct.price,
-      in_stock: secureProduct.inStock,
-      scrape_status: 'success',
-    })
+    if (secureProduct.price > 0) {
+      updateData.current_price = secureProduct.price
+    }
+
+    // Update the item in the database
+    await ItemsService.updateItem(item.id, session.user.id, updateData)
+
+    // Only add price history entry if we got a valid price
+    if (secureProduct.price > 0) {
+      await PriceHistoryService.addPriceEntry({
+        item_id: item.id,
+        price: secureProduct.price,
+        in_stock: secureProduct.inStock,
+        scrape_status: 'success',
+      })
+    } else {
+      // Log that we couldn't extract the price
+      console.warn(`Could not extract price for ASIN ${asin}, keeping existing price`)
+    }
 
     return NextResponse.json({ product: secureProduct })
   } catch (error: any) {
