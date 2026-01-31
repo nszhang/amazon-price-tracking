@@ -61,23 +61,76 @@ export async function POST(request: NextRequest) {
       const titleMatch = html.match(/<span id="productTitle"[^>]*>(.+?)<\/span>/s)
       const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'Unknown Product'
 
-      // Price - try multiple selectors
-      const pricePatterns = [
-        /<span class="a-price-whole">(\d+[\d,]*)<\/span><span class="a-price-fraction">(\d+)<\/span>/,
-        /<span id="priceblock_ourprice"[^>]*>\$?([\d,]+\.?\d*)/s,
-        /<span id="priceblock_dealprice"[^>]*>\$?([\d,]+\.?\d*)/s,
-        /<span class="a-offscreen">\$?([\d,]+\.?\d*)<\/span>/,
-      ]
-
+      // Price extraction - prioritize buy box price over other prices
+      // Amazon pages have multiple prices (original, other sellers, etc.), so we need specific patterns
       let price = 0
-      for (const pattern of pricePatterns) {
-        const match = html.match(pattern)
-        if (match) {
-          price = parseFloat(match[1].replace(/,/g, ''))
-          if (match[2]) {
-            price += parseFloat(`0.${match[2]}`)
+
+      // Pattern 1: Price inside buy box (most reliable for current price)
+      // This looks for the price within the #centerCol or #buybox section
+      const buyBoxPriceMatch = html.match(/<span[^>]*id=["']priceblock_dealprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+      if (buyBoxPriceMatch) {
+        price = parseFloat(buyBoxPriceMatch[1].replace(/,/g, ''))
+      }
+
+      // Pattern 2: Price from #priceblock_ourprice (regular price, no deal)
+      if (price === 0) {
+        const ourPriceMatch = html.match(/<span[^>]*id=["']priceblock_ourprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        if (ourPriceMatch) {
+          price = parseFloat(ourPriceMatch[1].replace(/,/g, ''))
+        }
+      }
+
+      // Pattern 3: Twister price (for products with size/color options)
+      if (price === 0) {
+        const twisterPriceMatch = html.match(/<span[^>]*id=["']twister[^>]*class=["']a-price-whole["'][^>]*>(\d+[\d,]*)<\/span>/s)
+        if (twisterPriceMatch) {
+          price = parseFloat(twisterPriceMatch[1].replace(/,/g, ''))
+        }
+      }
+
+      // Pattern 4: Android price block (used on mobile)
+      if (price === 0) {
+        const androidPriceMatch = html.match(/<span[^>]*id=["']android-buybox-price[^>]*>.*?class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        if (androidPriceMatch) {
+          price = parseFloat(androidPriceMatch[1].replace(/,/g, ''))
+        }
+      }
+
+      // Pattern 5: Inside #priceblock_saleprice (for sale items)
+      if (price === 0) {
+        const salePriceMatch = html.match(/<span[^>]*id=["']priceblock_saleprice[^>]*>.*?class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        if (salePriceMatch) {
+          price = parseFloat(salePriceMatch[1].replace(/,/g, ''))
+        }
+      }
+
+      // Pattern 6: Price from #apexOfferDisplay (for Amazon Prime exclusive pricing)
+      if (price === 0) {
+        const apexPriceMatch = html.match(/<span[^>]*id=["']apexOfferDisplay[^>]*>.*?class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+        if (apexPriceMatch) {
+          price = parseFloat(apexPriceMatch[1].replace(/,/g, ''))
+        }
+      }
+
+      // Pattern 7: Fallback - look for a-price-whole followed by a-price-fraction within buybox section
+      if (price === 0) {
+        const priceSectionMatch = html.match(/<div[^>]*id=["']buybox[^>]*>.*?<span[^>]*class=["']a-price-whole["'][^>]*>(\d+[\d,]*)<\/span><span[^>]*class=["']a-price-fraction["'][^>]*>(\d+)<\/span>/s)
+        if (priceSectionMatch) {
+          const wholePart = parseFloat(priceSectionMatch[1].replace(/,/g, ''))
+          const fractionPart = parseFloat(`0.${priceSectionMatch[2]}`)
+          price = wholePart + fractionPart
+        }
+      }
+
+      // Pattern 8: Last resort - any a-offscreen price (least reliable)
+      if (price === 0) {
+        const offscreenMatch = html.match(/<span[^>]*class=["']a-offscreen["'][^>]*aria-hidden=["']true["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/s)
+        if (offscreenMatch) {
+          const extractedPrice = parseFloat(offscreenMatch[1].replace(/,/g, ''))
+          // Sanity check: reject obviously wrong prices (like 1 cent or over $10,000)
+          if (extractedPrice > 0.01 && extractedPrice < 10000) {
+            price = extractedPrice
           }
-          break
         }
       }
 
