@@ -124,13 +124,21 @@ export async function POST(request: NextRequest) {
       // Amazon pages have multiple prices (original, other sellers, etc.), so we need specific patterns
       let price = 0
 
-      // Pattern 1: Twister price (most reliable - used for products with size/color options)
+      // Pattern 1: Twister plus price data (most reliable - price in value attribute)
+      const twisterPlusPriceMatch = html.match(/id=["']twister-plus-price-data-price["'][^>]*value=["']([\d,]+\.?\d*)["']/s)
+      if (twisterPlusPriceMatch) {
+        price = parseFloat(twisterPlusPriceMatch[1].replace(/,/g, ''))
+      }
+
+      // Pattern 2: Twister price (for products with size/color options)
       // This is the primary price display on most Amazon product pages
-      const twisterSectionMatch = html.match(/id=["']twister[^"']*["'][^>]*>(.{10,5000})/s)
-      if (twisterSectionMatch) {
-        const twisterPriceMatch = twisterSectionMatch[1].match(/<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-        if (twisterPriceMatch) {
-          price = parseFloat(twisterPriceMatch[1].replace(/,/g, ''))
+      if (price === 0) {
+        const twisterSectionMatch = html.match(/id=["']twister[^"']*["'][^>]*>(.{10,5000})/s)
+        if (twisterSectionMatch) {
+          const twisterPriceMatch = twisterSectionMatch[1].match(/<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
+          if (twisterPriceMatch) {
+            price = parseFloat(twisterPriceMatch[1].replace(/,/g, ''))
+          }
         }
       }
 
