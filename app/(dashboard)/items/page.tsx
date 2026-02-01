@@ -774,8 +774,8 @@ export default function ItemsPage() {
         </div>
       ) : (
         <div>
-          {/* Action buttons */}
-          {filteredAndSortedItems.length > 0 && (
+          {/* Action buttons - show when user has items, regardless of filter results */}
+          {hasItems && (
             <div className="mb-4 flex justify-between items-center">
               <button
                 onClick={toggleDeleteMode}
