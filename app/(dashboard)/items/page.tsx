@@ -65,6 +65,10 @@ export default function ItemsPage() {
   const [importResults, setImportResults] = useState<BulkImportResult[] | null>(null)
   const [hasItems, setHasItems] = useState(false) // Track if user has any items
 
+  // Selection state for bulk deletion
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [deleteMode, setDeleteMode] = useState(false)
+
   // Fetch items on mount
   const fetchItems = async (searchQuery?: string) => {
     setLoading(true)
@@ -296,6 +300,69 @@ export default function ItemsPage() {
     }
   }
 
+  // Toggle selection for an item
+  const toggleSelection = (id: number) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(id)) {
+        newSet.delete(id)
+      } else {
+        newSet.add(id)
+      }
+      return newSet
+    })
+  }
+
+  // Select all items in a category
+  const selectCategory = (category: string) => {
+    const categoryItems = groupedItems[category] || []
+    const categoryIds = new Set(categoryItems.map(i => i.id))
+    setSelectedIds(prev => new Set([...prev, ...categoryIds]))
+  }
+
+  // Deselect all items in a category
+  const deselectCategory = (category: string) => {
+    const categoryItems = groupedItems[category] || []
+    const categoryIds = new Set(categoryItems.map(i => i.id))
+    setSelectedIds(prev => {
+      const newSet = new Set(prev)
+      categoryIds.forEach(id => newSet.delete(id))
+      return newSet
+    })
+  }
+
+  // Delete selected items
+  const deleteSelected = async () => {
+    if (selectedIds.size === 0) return
+
+    const count = selectedIds.size
+    if (!confirm(`Are you sure you want to delete ${count} item${count > 1 ? 's' : ''}?`)) return
+
+    try {
+      // Delete all selected items in parallel
+      await Promise.all(
+        Array.from(selectedIds).map(id =>
+          fetch(`/api/items/${id}`, { method: 'DELETE' })
+        )
+      )
+
+      setItems(items.filter(i => !selectedIds.has(i.id)))
+      setSelectedIds(new Set())
+      setDeleteMode(false)
+      setSuccess(`Deleted ${count} item${count > 1 ? 's' : ''}`)
+    } catch (error) {
+      setError('Failed to delete some items')
+    }
+  }
+
+  // Toggle delete mode
+  const toggleDeleteMode = () => {
+    if (deleteMode) {
+      setSelectedIds(new Set())
+    }
+    setDeleteMode(!deleteMode)
+  }
+
   // Bulk import items
   const handleBulkImport = async () => {
     if (!importFile) {
@@ -363,39 +430,62 @@ export default function ItemsPage() {
   }, [])
 
   // Render item card
-  const renderItemCard = (item: TrackedItem) => (
-    <div
-      key={item.id}
-      className="bg-white rounded-lg shadow overflow-hidden hover:shadow-lg transition-shadow duration-200 cursor-pointer"
-      onClick={() => router.push(`/items/${item.id}`)}
-    >
-      {item.image_url && (
-        <img src={item.image_url.replace(/^http:/, 'https:')} alt={item.title} className="w-full h-48 object-cover" />
-      )}
-      <div className="p-4">
-        <h4 className="font-medium text-gray-900 line-clamp-2">{item.title}</h4>
-        <p className="text-sm text-gray-500 mt-1">{item.asin}</p>
-        <div className="mt-4 flex justify-between items-baseline">
-          <div>
-            <p className="text-2xl font-bold text-gray-900">${item.current_price.toFixed(2)}</p>
-            <p className="text-sm text-gray-500">Alert: ${item.alert_threshold.toFixed(2)}</p>
+  const renderItemCard = (item: TrackedItem) => {
+    const isSelected = selectedIds.has(item.id)
+
+    return (
+      <div
+        key={item.id}
+        className={`bg-white rounded-lg shadow overflow-hidden hover:shadow-lg transition-shadow duration-200 relative ${
+          deleteMode ? 'cursor-pointer' : ''
+        } ${isSelected ? 'ring-2 ring-blue-500' : ''}`}
+        onClick={() => deleteMode ? toggleSelection(item.id) : router.push(`/items/${item.id}`)}
+      >
+        {/* Checkbox overlay in delete mode */}
+        {deleteMode && (
+          <div className="absolute top-3 left-3 z-10">
+            <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${
+              isSelected ? 'bg-blue-500 border-blue-500' : 'bg-white border-gray-300'
+            }`}>
+              {isSelected && (
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+            </div>
           </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              deleteItem(item.id)
-            }}
-            className="text-red-600 hover:text-red-700 text-sm"
-          >
-            Remove
-          </button>
+        )}
+
+        {item.image_url && (
+          <img src={item.image_url.replace(/^http:/, 'https:')} alt={item.title} className="w-full h-48 object-cover" />
+        )}
+        <div className="p-4">
+          <h4 className="font-medium text-gray-900 line-clamp-2">{item.title}</h4>
+          <p className="text-sm text-gray-500 mt-1">{item.asin}</p>
+          <div className="mt-4 flex justify-between items-baseline">
+            <div>
+              <p className="text-2xl font-bold text-gray-900">${item.current_price.toFixed(2)}</p>
+              <p className="text-sm text-gray-500">Alert: ${item.alert_threshold.toFixed(2)}</p>
+            </div>
+            {!deleteMode && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  deleteItem(item.id)
+                }}
+                className="text-red-600 hover:text-red-700 text-sm"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-gray-400 mt-2">
+            Last checked: {item.last_checked_at ? new Date(item.last_checked_at).toLocaleDateString() : 'Never'}
+          </p>
         </div>
-        <p className="text-xs text-gray-400 mt-2">
-          Last checked: {item.last_checked_at ? new Date(item.last_checked_at).toLocaleDateString() : 'Never'}
-        </p>
       </div>
-    </div>
-  )
+    )
+  }
 
   // Render collapsible category section
   const renderCategorySection = (category: string, categoryItems: TrackedItem[]) => {
@@ -403,30 +493,48 @@ export default function ItemsPage() {
 
     const isCollapsed = collapsedSections.has(category)
     const categoryEmoji = category === 'Book' ? '📚' : category === 'Non-Book' ? '📦' : '📋'
+    const allSelected = categoryItems.every(i => selectedIds.has(i.id))
+    const someSelected = categoryItems.some(i => selectedIds.has(i.id))
 
     return (
       <div key={category} className="mb-6">
-        <button
-          onClick={() => toggleSection(category)}
-          className="w-full flex items-center justify-between bg-white rounded-t-lg shadow p-4 hover:bg-gray-50 transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            <span className="text-xl">{categoryEmoji}</span>
-            <h3 className="text-lg font-semibold text-gray-900">{category}s</h3>
-            <span className="text-sm text-gray-500">({categoryItems.length})</span>
+        <div className="bg-white rounded-t-lg shadow p-4">
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => toggleSection(category)}
+              className="flex items-center gap-2 hover:bg-gray-50 -ml-2 px-2 py-1 rounded transition-colors"
+            >
+              <svg
+                className={`w-5 h-5 text-gray-500 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+              <span className="text-xl">{categoryEmoji}</span>
+              <h3 className="text-lg font-semibold text-gray-900">{category}s</h3>
+              <span className="text-sm text-gray-500">({categoryItems.length})</span>
+            </button>
+
+            {deleteMode && !isCollapsed && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => allSelected ? deselectCategory(category) : selectCategory(category)}
+                  className="text-sm px-3 py-1 rounded-md border border-gray-300 hover:bg-gray-50 text-gray-700"
+                >
+                  {allSelected ? 'Deselect All' : 'Select All'}
+                </button>
+                <span className="text-sm text-gray-500">
+                  {categoryItems.filter(i => selectedIds.has(i.id)).length} selected
+                </span>
+              </div>
+            )}
           </div>
-          <svg
-            className={`w-5 h-5 text-gray-500 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
+        </div>
         {!isCollapsed && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-2">
-            {categoryItems.map(renderItemCard)}
+            {categoryItems.map(item => renderItemCard(item))}
           </div>
         )}
       </div>
@@ -666,17 +774,38 @@ export default function ItemsPage() {
         </div>
       ) : (
         <div>
-          {/* Collapse All / Expand All button */}
+          {/* Action buttons */}
           {filteredAndSortedItems.length > 0 && (
-            <div className="mb-4 flex justify-end">
+            <div className="mb-4 flex justify-between items-center">
               <button
-                onClick={toggleAllSections}
-                className="text-sm text-blue-600 hover:text-blue-700"
+                onClick={toggleDeleteMode}
+                className={`text-sm px-4 py-2 rounded-md border transition-colors ${
+                  deleteMode
+                    ? 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100'
+                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
               >
-                {collapsedSections.size === Object.keys(groupedItems).filter(c => groupedItems[c].length > 0).length
-                  ? 'Expand All'
-                  : 'Collapse All'}
+                {deleteMode ? 'Cancel Selection' : 'Select Items to Delete'}
               </button>
+
+              <div className="flex gap-3">
+                {deleteMode && selectedIds.size > 0 && (
+                  <button
+                    onClick={deleteSelected}
+                    className="text-sm px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                  >
+                    Delete {selectedIds.size} Selected
+                  </button>
+                )}
+                <button
+                  onClick={toggleAllSections}
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  {collapsedSections.size === Object.keys(groupedItems).filter(c => groupedItems[c].length > 0).length
+                    ? 'Expand All'
+                    : 'Collapse All'}
+                </button>
+              </div>
             </div>
           )}
 
