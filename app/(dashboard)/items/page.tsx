@@ -774,9 +774,8 @@ export default function ItemsPage() {
         </div>
       ) : (
         <div>
-          {/* Action buttons - show when user has items, regardless of filter results */}
-          {hasItems && (
-            <div className="mb-4 flex justify-between items-center">
+          {/* Action buttons - show when user has items */}
+          <div className="mb-4 flex justify-between items-center">
               <button
                 onClick={toggleDeleteMode}
                 className={`text-sm px-4 py-2 rounded-md border transition-colors ${
@@ -807,7 +806,6 @@ export default function ItemsPage() {
                 </button>
               </div>
             </div>
-          )}
 
           {/* Category sections */}
           {Object.entries(groupedItems)
