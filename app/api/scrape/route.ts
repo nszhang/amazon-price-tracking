@@ -191,6 +191,25 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // === Fallback 2.5: slot-price with aria-label (format variant display) ===
+      // Look for the price in the aria-checked="true" slot (current selection)
+      if (price === 0) {
+        const checkedIdx = html.indexOf('aria-checked="true"')
+        if (checkedIdx >= 0) {
+          // Look for aria-label price in the next 1000 characters
+          const section = html.substring(checkedIdx, checkedIdx + 1000)
+          const ariaLabelPrice = section.match(/aria-label=["']\$?([\d,]+\.?\d*)["']/)
+          if (ariaLabelPrice) {
+            const slotPrice = parseFloat(ariaLabelPrice[1].replace(/,/g, ''))
+            if (slotPrice > 0 && slotPrice < 1000) {
+              price = slotPrice
+              priceSource = 'SlotPriceChecked'
+              console.log(`[SCRAPING] ${asin}: Fallback 2.5 (aria-checked slot) = ${price}`)
+            }
+          }
+        }
+      }
+
       // === Fallback 3: Twister section a-offscreen (size/color variant display) ===
       if (price === 0) {
         const twisterSectionMatch = html.match(/id=["']twister[^"']*["'][^>]*>(.{10,5000})/s)
@@ -251,15 +270,24 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // === Fallback 9: Last resort - first a-offscreen with sanity check ===
+      // === Fallback 9: Last resort - first a-offscreen with sanity check (excluding list prices) ===
       if (price === 0) {
-        const offscreenMatch = html.match(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/s)
-        if (offscreenMatch) {
-          const extractedPrice = parseFloat(offscreenMatch[1].replace(/,/g, ''))
+        // Find all a-offscreen prices and skip ones that are clearly list prices
+        const allOffscreenMatches = html.matchAll(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/g)
+        for (const match of allOffscreenMatches) {
+          const extractedPrice = parseFloat(match[1].replace(/,/g, ''))
+          // Check 300 characters before for "List Price:" or "basisPrice"
+          const contextBefore = html.substring(Math.max(0, match.index - 300), match.index)
+          // Skip if this is clearly a list price
+          if (/List Price:?/i.test(contextBefore) || /basisPrice/i.test(contextBefore) || /aok-offscreen.*List Price/i.test(contextBefore)) {
+            console.log(`[SCRAPING] ${asin}: Skipping list price: $${extractedPrice}`)
+            continue
+          }
           if (extractedPrice >= 1 && extractedPrice < 10000) {
             price = extractedPrice
             priceSource = 'FallbackOffscreen'
             console.log(`[SCRAPING] ${asin}: Fallback 9 (last resort a-offscreen) = ${price}`)
+            break
           }
         }
       }
