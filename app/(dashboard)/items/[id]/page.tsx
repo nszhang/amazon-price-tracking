@@ -205,7 +205,7 @@ export default function ItemDetailsPage() {
               </a>
               <button
                 onClick={deleteItem}
-                className="px-4 py-2 border border-red-300 text-red-700 rounded-md hover:bg-red-50"
+                className="remove-button"
               >
                 Remove
               </button>
