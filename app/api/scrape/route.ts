@@ -164,6 +164,26 @@ export async function POST(request: NextRequest) {
         priceSource = 'NewAccordion'
       }
 
+      // === Fallback 0.5: aria-checked="true" slot (format variant display) ===
+      // This finds the price for the currently selected format (e.g., Paperback vs Hardcover)
+      // Must run BEFORE corePrice_feature_div which may contain list price
+      if (price === 0) {
+        const checkedIdx = html.indexOf('aria-checked="true"')
+        if (checkedIdx >= 0) {
+          // Look for aria-label price in the next 1000 characters
+          const section = html.substring(checkedIdx, checkedIdx + 1000)
+          const ariaLabelPrice = section.match(/aria-label=["']\$?([\d,]+\.?\d*)["']/)
+          if (ariaLabelPrice) {
+            const slotPrice = parseFloat(ariaLabelPrice[1].replace(/,/g, ''))
+            if (slotPrice > 0 && slotPrice < 1000) {
+              price = slotPrice
+              priceSource = 'SlotPriceChecked'
+              console.log(`[SCRAPING] ${asin}: Fallback 0.5 (aria-checked slot) = ${price}`)
+            }
+          }
+        }
+      }
+
       // === Fallback 1: corePrice_feature_div (when no accordion structure) ===
       if (price === 0) {
         const corePriceMatch = html.match(/id=["']corePrice_feature_div["'][^>]*>([\s\S]{1,5000})/)
@@ -187,25 +207,6 @@ export async function POST(request: NextRequest) {
             price = twisterPrice
             priceSource = 'TwisterPriceData'
             console.log(`[SCRAPING] ${asin}: Fallback 2 (twister-plus-price-data-price) = ${price}`)
-          }
-        }
-      }
-
-      // === Fallback 2.5: slot-price with aria-label (format variant display) ===
-      // Look for the price in the aria-checked="true" slot (current selection)
-      if (price === 0) {
-        const checkedIdx = html.indexOf('aria-checked="true"')
-        if (checkedIdx >= 0) {
-          // Look for aria-label price in the next 1000 characters
-          const section = html.substring(checkedIdx, checkedIdx + 1000)
-          const ariaLabelPrice = section.match(/aria-label=["']\$?([\d,]+\.?\d*)["']/)
-          if (ariaLabelPrice) {
-            const slotPrice = parseFloat(ariaLabelPrice[1].replace(/,/g, ''))
-            if (slotPrice > 0 && slotPrice < 1000) {
-              price = slotPrice
-              priceSource = 'SlotPriceChecked'
-              console.log(`[SCRAPING] ${asin}: Fallback 2.5 (aria-checked slot) = ${price}`)
-            }
           }
         }
       }
