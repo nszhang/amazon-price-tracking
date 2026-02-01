@@ -15,7 +15,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const items = await ItemsService.getUserItems(session.user.id)
+    // Get search query parameter
+    const searchParams = request.nextUrl.searchParams
+    const search = searchParams.get('search') || undefined
+
+    const items = await ItemsService.getUserItems(session.user.id, search)
 
     return NextResponse.json({ data: items })
   } catch (error) {

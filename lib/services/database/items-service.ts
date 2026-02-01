@@ -8,19 +8,25 @@ export class ItemsService {
   /**
    * Get all items for a user
    */
-  static async getUserItems(userId: string): Promise<TrackedItem[]> {
-    const result = await query(
-      `SELECT 
-        id, user_id, asin, isbn, amazon_url, amazon_domain, title, brand, category, 
-        image_url, current_price, currency, alert_threshold, alert_threshold_percent, 
-        alert_enabled, notes, first_tracked_at, last_checked_at, last_price_drop_at, 
+  static async getUserItems(userId: string, search?: string): Promise<TrackedItem[]> {
+    let queryText = `SELECT
+        id, user_id, asin, isbn, amazon_url, amazon_domain, title, brand, category,
+        image_url, current_price, currency, alert_threshold, alert_threshold_percent,
+        alert_enabled, notes, first_tracked_at, last_checked_at, last_price_drop_at,
         created_at, updated_at
-       FROM tracked_items 
-       WHERE user_id = $1 
-       ORDER BY created_at DESC`,
-      [userId]
-    )
-    
+       FROM tracked_items
+       WHERE user_id = $1`
+    const params: any[] = [userId]
+
+    if (search) {
+      queryText += ` AND (title ILIKE $2 OR asin ILIKE $2 OR isbn ILIKE $2)`
+      params.push(`%${search}%`)
+    }
+
+    queryText += ` ORDER BY created_at DESC`
+
+    const result = await query(queryText, params)
+
     return result.rows.map(row => this.mapRowToItem(row))
   }
 

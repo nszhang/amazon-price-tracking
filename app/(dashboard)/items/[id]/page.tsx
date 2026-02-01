@@ -8,6 +8,14 @@ import { PriceChart } from '@/components/charts/PriceChart'
 import type { TrackedItem, PriceHistory } from '@/lib/types'
 import { formatPrice, formatDistanceToNow } from '@/lib/utils/formatters'
 
+type ItemCategory = 'Book' | 'Non-Book' | ''
+
+const CATEGORIES: { value: ItemCategory; label: string }[] = [
+  { value: '', label: 'Select category...' },
+  { value: 'Book', label: '📚 Book' },
+  { value: 'Non-Book', label: '📦 Non-Book' },
+]
+
 export default function ItemDetailsPage() {
   const params = useParams()
   const router = useRouter()
@@ -16,6 +24,7 @@ export default function ItemDetailsPage() {
   const [history, setHistory] = useState<PriceHistory[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [savingCategory, setSavingCategory] = useState(false)
 
   useEffect(() => {
     fetchItemDetails()
@@ -111,6 +120,24 @@ export default function ItemDetailsPage() {
       })
     } catch (error) {
       console.error('Failed to update notes:', error)
+    }
+  }
+
+  const updateCategory = async (category: string) => {
+    setSavingCategory(true)
+    try {
+      const res = await fetch(`/api/items/${params.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: category || null })
+      })
+      if (res.ok) {
+        fetchItemDetails()
+      }
+    } catch (error) {
+      console.error('Failed to update category:', error)
+    } finally {
+      setSavingCategory(false)
     }
   }
 
@@ -212,6 +239,35 @@ export default function ItemDetailsPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Category Settings */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Category</h2>
+        <div className="flex items-center gap-4">
+          <label className="text-sm text-gray-700">Item category:</label>
+          <select
+            value={item.category || ''}
+            onChange={(e) => updateCategory(e.target.value)}
+            disabled={savingCategory}
+            className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
+          >
+            {CATEGORIES.map(cat => (
+              <option key={cat.value} value={cat.value}>
+                {cat.label}
+              </option>
+            ))}
+          </select>
+          {savingCategory && (
+            <span className="text-sm text-gray-500">Saving...</span>
+          )}
+        </div>
+        <p className="mt-2 text-sm text-gray-500">
+          {item.isbn
+            ? 'This item has an ISBN and is categorized as a Book. You can change this if needed.'
+            : 'This item does not have an ISBN and is categorized as Non-Book. You can change this if needed.'
+          }
+        </p>
       </div>
 
       {/* Alert Settings */}

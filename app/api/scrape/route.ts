@@ -340,12 +340,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Auto-detect category based on ISBN presence
+    // If item has an ISBN, it's a Book; otherwise it's a Non-Book
+    const detectedCategory = item.isbn ? 'Book' : 'Non-Book'
+
     // Only update price if we successfully extracted it (not 0)
     const updateData: any = {
       title: secureProduct.title,
       image_url: secureProduct.image_url,
       brand: secureProduct.brand,
       currency: secureProduct.currency,
+    }
+
+    // Set category if not already set
+    if (!item.category) {
+      updateData.category = detectedCategory
     }
 
     if (secureProduct.price > 0) {

@@ -2,17 +2,19 @@
 
 // Items Management Page - Add and manage tracked items
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface TrackedItem {
   id: number
   asin: string
+  isbn?: string
   title: string
   current_price: number
   alert_threshold: number
   amazon_url: string
   image_url?: string
+  category?: string
   last_checked_at?: string
   created_at: string
 }
@@ -28,6 +30,9 @@ const AMAZON_DOMAINS = [
   { value: 'co.jp', name: 'Japan', flag: '🇯🇵' },
 ] as const
 
+type CategoryFilter = 'all' | 'Book' | 'Non-Book'
+type SortOption = 'newest' | 'price-low' | 'price-high' | 'name'
+
 export default function ItemsPage() {
   const router = useRouter()
   const [items, setItems] = useState<TrackedItem[]>([])
@@ -38,11 +43,20 @@ export default function ItemsPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
+  // Search and filter state
+  const [search, setSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
+  const [sortBy, setSortBy] = useState<SortOption>('newest')
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+
   // Fetch items on mount
-  const fetchItems = async () => {
+  const fetchItems = async (searchQuery?: string) => {
     setLoading(true)
     try {
-      const res = await fetch('/api/items')
+      const url = searchQuery
+        ? `/api/items?search=${encodeURIComponent(searchQuery)}`
+        : '/api/items'
+      const res = await fetch(url)
       if (res.ok) {
         const json = await res.json()
         setItems(json.data || [])
@@ -52,6 +66,94 @@ export default function ItemsPage() {
     }
     setLoading(false)
   }
+
+  // Filter and sort items
+  const filteredAndSortedItems = useMemo(() => {
+    let filtered = [...items]
+
+    // Apply category filter
+    if (categoryFilter !== 'all') {
+      filtered = filtered.filter(item => item.category === categoryFilter)
+    }
+
+    // Apply search filter (client-side for additional filtering)
+    if (search) {
+      const searchLower = search.toLowerCase()
+      filtered = filtered.filter(item =>
+        item.title.toLowerCase().includes(searchLower) ||
+        item.asin.toLowerCase().includes(searchLower) ||
+        item.isbn?.toLowerCase().includes(searchLower)
+      )
+    }
+
+    // Apply sorting
+    switch (sortBy) {
+      case 'newest':
+        filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        break
+      case 'price-low':
+        filtered.sort((a, b) => a.current_price - b.current_price)
+        break
+      case 'price-high':
+        filtered.sort((a, b) => b.current_price - a.current_price)
+        break
+      case 'name':
+        filtered.sort((a, b) => a.title.localeCompare(b.title))
+        break
+    }
+
+    return filtered
+  }, [items, categoryFilter, search, sortBy])
+
+  // Group items by category
+  const groupedItems = useMemo(() => {
+    const groups: Record<string, TrackedItem[]> = {
+      'Book': [],
+      'Non-Book': [],
+      'Uncategorized': []
+    }
+
+    filteredAndSortedItems.forEach(item => {
+      const category = item.category || 'Uncategorized'
+      if (!groups[category]) {
+        groups[category] = []
+      }
+      groups[category].push(item)
+    })
+
+    return groups
+  }, [filteredAndSortedItems])
+
+  // Toggle collapsed state for a category
+  const toggleSection = (category: string) => {
+    setCollapsedSections(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(category)) {
+        newSet.delete(category)
+      } else {
+        newSet.add(category)
+      }
+      return newSet
+    })
+  }
+
+  // Toggle all sections
+  const toggleAllSections = () => {
+    const categories = Object.keys(groupedItems).filter(c => groupedItems[c].length > 0)
+    if (collapsedSections.size === categories.length) {
+      setCollapsedSections(new Set())
+    } else {
+      setCollapsedSections(new Set(categories))
+    }
+  }
+
+  // Debounced search
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      fetchItems(search)
+    }, 300)
+    return () => clearTimeout(timeoutId)
+  }, [search])
 
   // Add new item
   const addItem = async (e: React.FormEvent) => {
@@ -145,7 +247,7 @@ export default function ItemsPage() {
 
       setUrl('')
       // Wait a moment for the scrape to complete before refreshing
-      setTimeout(() => fetchItems(), 2000)
+      setTimeout(() => fetchItems(search), 2000)
     } catch (err: any) {
       setError(err.message || 'Failed to add item')
     } finally {
@@ -176,6 +278,77 @@ export default function ItemsPage() {
   useEffect(() => {
     fetchItems()
   }, [])
+
+  // Render item card
+  const renderItemCard = (item: TrackedItem) => (
+    <div
+      key={item.id}
+      className="bg-white rounded-lg shadow overflow-hidden hover:shadow-lg transition-shadow duration-200 cursor-pointer"
+      onClick={() => router.push(`/items/${item.id}`)}
+    >
+      {item.image_url && (
+        <img src={item.image_url.replace(/^http:/, 'https:')} alt={item.title} className="w-full h-48 object-cover" />
+      )}
+      <div className="p-4">
+        <h4 className="font-medium text-gray-900 line-clamp-2">{item.title}</h4>
+        <p className="text-sm text-gray-500 mt-1">{item.asin}</p>
+        <div className="mt-4 flex justify-between items-baseline">
+          <div>
+            <p className="text-2xl font-bold text-gray-900">${item.current_price.toFixed(2)}</p>
+            <p className="text-sm text-gray-500">Alert: ${item.alert_threshold.toFixed(2)}</p>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              deleteItem(item.id)
+            }}
+            className="text-red-600 hover:text-red-700 text-sm"
+          >
+            Remove
+          </button>
+        </div>
+        <p className="text-xs text-gray-400 mt-2">
+          Last checked: {item.last_checked_at ? new Date(item.last_checked_at).toLocaleDateString() : 'Never'}
+        </p>
+      </div>
+    </div>
+  )
+
+  // Render collapsible category section
+  const renderCategorySection = (category: string, categoryItems: TrackedItem[]) => {
+    if (categoryItems.length === 0) return null
+
+    const isCollapsed = collapsedSections.has(category)
+    const categoryEmoji = category === 'Book' ? '📚' : category === 'Non-Book' ? '📦' : '📋'
+
+    return (
+      <div key={category} className="mb-6">
+        <button
+          onClick={() => toggleSection(category)}
+          className="w-full flex items-center justify-between bg-white rounded-t-lg shadow p-4 hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-xl">{categoryEmoji}</span>
+            <h3 className="text-lg font-semibold text-gray-900">{category}s</h3>
+            <span className="text-sm text-gray-500">({categoryItems.length})</span>
+          </div>
+          <svg
+            className={`w-5 h-5 text-gray-500 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {!isCollapsed && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-2">
+            {categoryItems.map(renderItemCard)}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -231,6 +404,61 @@ export default function ItemsPage() {
         </form>
       </div>
 
+      {/* Search, Filter, and Sort */}
+      {items.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-4">
+          <div className="flex flex-col md:flex-row gap-4">
+            {/* Search */}
+            <div className="flex-1">
+              <div className="relative">
+                <svg
+                  className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by title, ASIN, or ISBN..."
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+                />
+              </div>
+            </div>
+
+            {/* Filter */}
+            <div>
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
+                className="px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
+              >
+                <option value="all">All Categories</option>
+                <option value="Book">Books</option>
+                <option value="Non-Book">Non-Books</option>
+              </select>
+            </div>
+
+            {/* Sort */}
+            <div>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as SortOption)}
+                className="px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
+              >
+                <option value="newest">Sort: Newest</option>
+                <option value="price-low">Price: Low to High</option>
+                <option value="price-high">Price: High to Low</option>
+                <option value="name">Name: A to Z</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Items List */}
       {loading ? (
         <div className="text-center py-12">
@@ -246,40 +474,42 @@ export default function ItemsPage() {
           <p className="mt-1 text-gray-500">Get started by adding an Amazon product to track.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="bg-white rounded-lg shadow overflow-hidden hover:shadow-lg transition-shadow duration-200 cursor-pointer"
-              onClick={() => router.push(`/items/${item.id}`)}
-            >
-              {item.image_url && (
-                <img src={item.image_url.replace(/^http:/, 'https:')} alt={item.title} className="w-full h-48 object-cover" />
-              )}
-              <div className="p-4">
-                <h4 className="font-medium text-gray-900 line-clamp-2">{item.title}</h4>
-                <p className="text-sm text-gray-500 mt-1">{item.asin}</p>
-                <div className="mt-4 flex justify-between items-baseline">
-                  <div>
-                    <p className="text-2xl font-bold text-gray-900">${item.current_price.toFixed(2)}</p>
-                    <p className="text-sm text-gray-500">Alert: ${item.alert_threshold.toFixed(2)}</p>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      deleteItem(item.id)
-                    }}
-                    className="text-red-600 hover:text-red-700 text-sm"
-                  >
-                    Remove
-                  </button>
-                </div>
-                <p className="text-xs text-gray-400 mt-2">
-                  Last checked: {item.last_checked_at ? new Date(item.last_checked_at).toLocaleDateString() : 'Never'}
-                </p>
-              </div>
+        <div>
+          {/* Collapse All / Expand All button */}
+          {filteredAndSortedItems.length > 0 && (
+            <div className="mb-4 flex justify-end">
+              <button
+                onClick={toggleAllSections}
+                className="text-sm text-blue-600 hover:text-blue-700"
+              >
+                {collapsedSections.size === Object.keys(groupedItems).filter(c => groupedItems[c].length > 0).length
+                  ? 'Expand All'
+                  : 'Collapse All'}
+              </button>
             </div>
-          ))}
+          )}
+
+          {/* Category sections */}
+          {Object.entries(groupedItems)
+            .filter(([_, items]) => items.length > 0)
+            .sort(([a], [b]) => {
+              // Sort categories: Book first, then Non-Book, then others
+              if (a === 'Book') return -1
+              if (b === 'Book') return 1
+              if (a === 'Non-Book') return -1
+              if (b === 'Non-Book') return 1
+              return a.localeCompare(b)
+            })
+            .map(([category, categoryItems]) =>
+              renderCategorySection(category, categoryItems)
+            )}
+
+          {/* No results message */}
+          {filteredAndSortedItems.length === 0 && (
+            <div className="bg-white rounded-lg shadow p-12 text-center">
+              <p className="text-gray-500">No items match your search or filter criteria.</p>
+            </div>
+          )}
         </div>
       )}
     </div>
