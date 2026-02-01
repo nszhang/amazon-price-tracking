@@ -118,6 +118,7 @@ export async function POST(request: NextRequest) {
 
         results.push({
           identifier,
+          asin: asinValue,
           status: 'added',
           message: 'Added successfully',
           itemId: item.id

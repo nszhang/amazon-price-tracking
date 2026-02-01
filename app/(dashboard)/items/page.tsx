@@ -35,6 +35,7 @@ type SortOption = 'newest' | 'price-low' | 'price-high' | 'name'
 
 interface BulkImportResult {
   identifier: string
+  asin?: string
   status: 'added' | 'skipped' | 'invalid'
   message?: string
   itemId?: number
@@ -326,14 +327,29 @@ export default function ItemsPage() {
       setImportResults(data.results)
       if (data.summary.added > 0) {
         setHasItems(true)
+
+        // Trigger scraping for all added items
+        const addedItems = data.results.filter((r: BulkImportResult) => r.status === 'added')
+        for (const item of addedItems) {
+          // Scrape each added item in parallel
+          fetch('/api/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: `https://www.amazon.${importDomain}/dp/${item.asin || item.identifier}`,
+              asin: item.asin || item.identifier,
+              domain: importDomain,
+            }),
+          }).catch(err => console.warn('[BULK IMPORT] Scrape failed for', item.identifier, err))
+        }
       }
       setSuccess(`Imported ${data.summary.added} items successfully. ${data.summary.skipped} were skipped, ${data.summary.invalid} were invalid.`)
 
       // Clear the file input
       setImportFile(null)
 
-      // Refresh items after a short delay
-      setTimeout(() => fetchItems(search), 2000)
+      // Refresh items after a delay to allow scraping to complete
+      setTimeout(() => fetchItems(search), 3000)
     } catch (err: any) {
       setError(err.message || 'Failed to import items')
     } finally {
