@@ -33,6 +33,13 @@ const AMAZON_DOMAINS = [
 type CategoryFilter = 'all' | 'Book' | 'Non-Book'
 type SortOption = 'newest' | 'price-low' | 'price-high' | 'name'
 
+interface BulkImportResult {
+  identifier: string
+  status: 'added' | 'skipped' | 'invalid'
+  message?: string
+  itemId?: number
+}
+
 export default function ItemsPage() {
   const router = useRouter()
   const [items, setItems] = useState<TrackedItem[]>([])
@@ -48,6 +55,13 @@ export default function ItemsPage() {
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
   const [sortBy, setSortBy] = useState<SortOption>('newest')
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+
+  // Bulk import state
+  const [showBulkImport, setShowBulkImport] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importDomain, setImportDomain] = useState('ca')
+  const [importResults, setImportResults] = useState<BulkImportResult[] | null>(null)
 
   // Fetch items on mount
   const fetchItems = async (searchQuery?: string) => {
@@ -274,6 +288,49 @@ export default function ItemsPage() {
     }
   }
 
+  // Bulk import items
+  const handleBulkImport = async () => {
+    if (!importFile) {
+      setError('Please select a file')
+      return
+    }
+
+    setImporting(true)
+    setError('')
+    setSuccess('')
+    setImportResults(null)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', importFile)
+      formData.append('amazon_domain', importDomain)
+
+      const response = await fetch('/api/items/bulk', {
+        method: 'POST',
+        body: formData
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to import items')
+      }
+
+      setImportResults(data.results)
+      setSuccess(`Imported ${data.summary.added} items successfully. ${data.summary.skipped} were skipped, ${data.summary.invalid} were invalid.`)
+
+      // Clear the file input
+      setImportFile(null)
+
+      // Refresh items after a short delay
+      setTimeout(() => fetchItems(search), 2000)
+    } catch (err: any) {
+      setError(err.message || 'Failed to import items')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   // Fetch items on mount
   useEffect(() => {
     fetchItems()
@@ -402,6 +459,114 @@ export default function ItemsPage() {
           {error && <p className="text-sm text-red-600">{error}</p>}
           {success && <p className="text-sm text-green-600">{success}</p>}
         </form>
+      </div>
+
+      {/* Bulk Import */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-medium text-gray-900">Bulk Import</h3>
+          <button
+            type="button"
+            onClick={() => setShowBulkImport(!showBulkImport)}
+            className="text-sm text-blue-600 hover:text-blue-700"
+          >
+            {showBulkImport ? 'Hide' : 'Show'}
+          </button>
+        </div>
+
+        {showBulkImport && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Upload a text file containing ASINs or ISBNs (one per line, or comma-separated). Max 100 items per batch.
+            </p>
+
+            <div className="flex gap-3 items-end">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select File
+                </label>
+                <input
+                  type="file"
+                  accept=".txt,.csv"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-gray-900 text-sm file:mr-4 file:py-1 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                  disabled={importing}
+                />
+                {importFile && (
+                  <p className="mt-1 text-sm text-gray-500">Selected: {importFile.name}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Amazon Domain
+                </label>
+                <select
+                  value={importDomain}
+                  onChange={(e) => setImportDomain(e.target.value)}
+                  className="px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
+                  disabled={importing}
+                >
+                  {AMAZON_DOMAINS.map(d => (
+                    <option key={d.value} value={d.value}>
+                      {d.flag} {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleBulkImport}
+                disabled={importing || !importFile}
+                className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 whitespace-nowrap self-end"
+              >
+                {importing ? 'Importing...' : 'Import Items'}
+              </button>
+            </div>
+
+            {/* Import Results */}
+            {importResults && importResults.length > 0 && (
+              <div className="mt-4 border rounded-md overflow-hidden">
+                <div className="bg-gray-50 px-4 py-2 border-b">
+                  <p className="text-sm font-medium text-gray-700">
+                    Import Results ({importResults.length} items)
+                  </p>
+                </div>
+                <div className="max-h-60 overflow-y-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Identifier</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {importResults.map((result, idx) => (
+                        <tr key={idx}>
+                          <td className="px-4 py-2 text-sm text-gray-900 font-mono">{result.identifier}</td>
+                          <td className="px-4 py-2 text-sm">
+                            {result.status === 'added' && (
+                              <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Added</span>
+                            )}
+                            {result.status === 'skipped' && (
+                              <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">Skipped</span>
+                            )}
+                            {result.status === 'invalid' && (
+                              <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">Invalid</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 text-sm text-gray-500">{result.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Search, Filter, and Sort */}
