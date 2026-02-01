@@ -62,6 +62,7 @@ export default function ItemsPage() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importDomain, setImportDomain] = useState('ca')
   const [importResults, setImportResults] = useState<BulkImportResult[] | null>(null)
+  const [hasItems, setHasItems] = useState(false) // Track if user has any items
 
   // Fetch items on mount
   const fetchItems = async (searchQuery?: string) => {
@@ -73,7 +74,12 @@ export default function ItemsPage() {
       const res = await fetch(url)
       if (res.ok) {
         const json = await res.json()
-        setItems(json.data || [])
+        const fetchedItems = json.data || []
+        setItems(fetchedItems)
+        // Set hasItems based on initial fetch (without search)
+        if (!searchQuery && fetchedItems.length > 0) {
+          setHasItems(true)
+        }
       }
     } catch (error) {
       console.error('Error fetching items:', error)
@@ -232,6 +238,7 @@ export default function ItemsPage() {
         throw new Error(data.error || 'Failed to add item')
       }
 
+      setHasItems(true)
       setSuccess('Item added! Fetching product details from Amazon...')
 
       // Immediately scrape product info
@@ -317,6 +324,9 @@ export default function ItemsPage() {
       }
 
       setImportResults(data.results)
+      if (data.summary.added > 0) {
+        setHasItems(true)
+      }
       setSuccess(`Imported ${data.summary.added} items successfully. ${data.summary.skipped} were skipped, ${data.summary.invalid} were invalid.`)
 
       // Clear the file input
@@ -570,7 +580,7 @@ export default function ItemsPage() {
       </div>
 
       {/* Search, Filter, and Sort */}
-      {items.length > 0 && (
+      {(hasItems || items.length > 0) && (
         <div className="bg-white rounded-lg shadow p-4">
           <div className="flex flex-col md:flex-row gap-4">
             {/* Search */}
