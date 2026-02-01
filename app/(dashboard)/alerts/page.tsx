@@ -14,10 +14,11 @@ interface Alert {
   status: 'active' | 'triggered' | 'disabled'
   triggered_at: string
   acknowledged_at?: string
-  item_title: string
-  item_asin: string
-  item_url: string
-  image_url?: string
+  tracked_items?: {
+    title: string
+    asin: string
+    amazon_url: string
+  }
 }
 
 export default function AlertsPage() {
@@ -111,14 +112,9 @@ export default function AlertsPage() {
                   <div key={alert.id} className="bg-white rounded-lg shadow p-6 border-l-4 border-green-500">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <div className="flex items-center gap-3">
-                          {alert.image_url && (
-                            <img src={alert.image_url} alt="" className="w-16 h-16 object-cover rounded" />
-                          )}
-                          <div>
-                            <h4 className="font-medium text-gray-900">{alert.item_title}</h4>
-                            <p className="text-sm text-gray-500">{alert.item_asin}</p>
-                          </div>
+                        <div>
+                          <h4 className="font-medium text-gray-900">{alert.tracked_items?.title || 'Unknown Item'}</h4>
+                          <p className="text-sm text-gray-500">{alert.tracked_items?.asin}</p>
                         </div>
                         <div className="mt-4 flex items-center gap-6">
                           <div>
@@ -146,7 +142,7 @@ export default function AlertsPage() {
                       </div>
                       <div className="flex flex-col gap-2">
                         <a
-                          href={alert.item_url}
+                          href={alert.tracked_items?.amazon_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
@@ -155,7 +151,7 @@ export default function AlertsPage() {
                         </a>
                         <button
                           onClick={() => acknowledgeAlert(alert.id)}
-                          className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 text-sm"
+                          className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800 text-sm"
                         >
                           Dismiss
                         </button>
@@ -176,7 +172,7 @@ export default function AlertsPage() {
                   <div key={alert.id} className="bg-white rounded-lg shadow p-4 opacity-75">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-medium text-gray-700">{alert.item_title}</p>
+                        <p className="font-medium text-gray-700">{alert.tracked_items?.title || 'Unknown Item'}</p>
                         <p className="text-sm text-gray-500">
                           Dropped to ${alert.actual_price.toFixed(2)} (was ${alert.previous_price?.toFixed(2)})
                         </p>

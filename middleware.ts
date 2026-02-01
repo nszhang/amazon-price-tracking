@@ -12,18 +12,11 @@ export default withAuth(
       requestHeaders.set('x-user-id', req.nextauth.token.id as string)
     }
 
-    // Add Content-Security-Policy to upgrade insecure requests
     const response = NextResponse.next({
       request: {
         headers: requestHeaders,
       },
     })
-
-    // Set CSP header to upgrade HTTP to HTTPS for images
-    response.headers.set(
-      'Content-Security-Policy',
-      "upgrade-insecure-requests"
-    )
 
     return response
   },
@@ -31,7 +24,8 @@ export default withAuth(
     callbacks: {
       authorized({ req, token }) {
         // Protect dashboard routes
-        if (req.nextUrl.pathname.startsWith('/items') ||
+        if (req.nextUrl.pathname.startsWith('/dashboard') ||
+            req.nextUrl.pathname.startsWith('/items') ||
             req.nextUrl.pathname.startsWith('/alerts') ||
             req.nextUrl.pathname.startsWith('/settings')) {
           return token !== null
@@ -47,6 +41,7 @@ export default withAuth(
 
 export const config = {
   matcher: [
+    '/dashboard/:path*',
     '/items/:path*',
     '/alerts/:path*',
     '/settings/:path*',

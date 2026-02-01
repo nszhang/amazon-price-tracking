@@ -45,6 +45,8 @@ export async function PATCH(request: NextRequest) {
     const profile = await ProfilesService.updateProfile(session.user.id, {
       full_name: body.full_name,
       alert_email: body.alert_email,
+      theme: body.theme,
+      preferences: body.preferences,
     })
 
     return NextResponse.json({ data: profile })

@@ -6,7 +6,7 @@ import type { PriceAlert, TrackedItem } from '@/lib/types'
 
 export class EmailService {
   private static resendApiKey = process.env.RESEND_API_KEY
-  private static fromEmail = 'Amazon Price Tracker <alerts@your-domain.com>'
+  private static fromEmail = 'Amazon Price Tracker <onboarding@resend.dev>'
 
   /**
    * Send a price alert email
@@ -83,8 +83,15 @@ export class EmailService {
   }): string {
     const { recipientName, itemTitle, itemUrl, itemImage, previousPrice, currentPrice, priceDrop, currency } = data
     const symbol = currency === 'USD' ? '$' : currency + ' '
-    const savings = previousPrice - currentPrice
-    const dropPercent = priceDrop ? priceDrop.toFixed(1) : ((savings / previousPrice) * 100).toFixed(1)
+
+    // Calculate savings only if we have a valid previous price
+    const hasPreviousPrice = previousPrice != null && previousPrice > 0
+    const savings = hasPreviousPrice ? previousPrice - currentPrice : 0
+    const dropPercent = priceDrop
+      ? priceDrop.toFixed(1)
+      : hasPreviousPrice
+        ? ((savings / previousPrice) * 100).toFixed(1)
+        : '0.0'
 
     return `
 <!DOCTYPE html>
@@ -107,20 +114,20 @@ export class EmailService {
 <body>
   <div class="container">
     <div class="header">
-      <h1>🎉 Price Drop Alert!</h1>
+      <h1>🎉 Price Alert!</h1>
     </div>
     <div class="content">
       <h2>Hi ${recipientName},</h2>
-      <p>Great news! An item you're tracking has dropped in price:</p>
+      <p>Great news! An item you're tracking is now at your target price:</p>
 
       ${itemImage ? `<img src="${itemImage}" alt="${itemTitle}" style="max-width: 100%; border-radius: 8px; margin: 20px 0;">` : ''}
 
       <h3>${itemTitle}</h3>
 
       <div class="price-box">
-        <div class="old-price">${symbol}${previousPrice.toFixed(2)}</div>
-        <div class="new-price">${symbol}${currentPrice.toFixed(2)}</div>
-        <div class="savings">You save ${symbol}${savings.toFixed(2)} (${dropPercent}%)</div>
+        ${hasPreviousPrice ? `<div class="old-price">Was: ${symbol}${previousPrice.toFixed(2)}</div>` : ''}
+        <div class="new-price">Now: ${symbol}${currentPrice.toFixed(2)}</div>
+        ${hasPreviousPrice && savings > 0 ? `<div class="savings">You save ${symbol}${savings.toFixed(2)} (${dropPercent}%)</div>` : '<div class="savings">Target price reached!</div>'}
       </div>
 
       <center>

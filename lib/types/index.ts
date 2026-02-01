@@ -17,6 +17,7 @@ export interface UserProfile {
   avatar_url?: string;
   alert_email?: string;
   timezone: string;
+  theme: Theme;
   preferences: UserPreferences;
   created_at: string;
   updated_at: string;
@@ -25,7 +26,10 @@ export interface UserProfile {
 export interface UserPreferences {
   currency: string;
   default_alert_threshold_percent: number;
+  default_amazon_domain?: AmazonDomain;
 }
+
+export type Theme = 'light' | 'dark' | 'system';
 
 export interface TrackedItem {
   id: number;
@@ -77,6 +81,11 @@ export interface PriceAlert {
   triggered_at: string;
   acknowledged_at?: string;
   created_at: string;
+  tracked_items?: {
+    title: string
+    asin: string
+    amazon_url: string
+  };
 }
 
 // Scraping Types
@@ -114,6 +123,7 @@ export interface UpdateItemInput {
   brand?: string;
   category?: string;
   current_price?: number;
+  currency?: string;
   alert_threshold?: number;
   alert_threshold_percent?: number;
   alert_enabled?: boolean;
@@ -125,5 +135,6 @@ export interface UpdateProfileInput {
   avatar_url?: string;
   alert_email?: string;
   timezone?: string;
+  theme?: Theme;
   preferences?: Partial<UserPreferences>;
 }

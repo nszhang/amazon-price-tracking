@@ -25,6 +25,64 @@ export class ItemsService {
   }
 
   /**
+   * Get all tracked items across all users (for cron scraping)
+   */
+  static async getAllItems(): Promise<TrackedItem[]> {
+    const result = await query(
+      `SELECT
+        id, user_id, asin, isbn, amazon_url, amazon_domain, title, brand, category,
+        image_url, current_price, currency, alert_threshold, alert_threshold_percent,
+        alert_enabled, notes, first_tracked_at, last_checked_at, last_price_drop_at,
+        created_at, updated_at
+       FROM tracked_items
+       ORDER BY last_checked_at ASC NULLS FIRST`
+    )
+
+    return result.rows.map(row => this.mapRowToItem(row))
+  }
+
+  /**
+   * Update item fields without requiring userId (for cron jobs)
+   */
+  static async updateItemById(itemId: number, input: UpdateItemInput): Promise<void> {
+    const setClause: string[] = []
+    const values: any[] = []
+    let paramIndex = 1
+
+    if (input.title !== undefined) {
+      setClause.push(`title = $${paramIndex++}`)
+      values.push(input.title)
+    }
+    if (input.image_url !== undefined) {
+      setClause.push(`image_url = $${paramIndex++}`)
+      values.push(input.image_url)
+    }
+    if (input.brand !== undefined) {
+      setClause.push(`brand = $${paramIndex++}`)
+      values.push(input.brand)
+    }
+    if (input.current_price !== undefined) {
+      setClause.push(`current_price = $${paramIndex++}`)
+      values.push(input.current_price)
+    }
+    if (input.currency !== undefined) {
+      setClause.push(`currency = $${paramIndex++}`)
+      values.push(input.currency)
+    }
+
+    if (setClause.length === 0) return
+
+    setClause.push(`last_checked_at = NOW()`)
+    setClause.push(`updated_at = NOW()`)
+    values.push(itemId)
+
+    await query(
+      `UPDATE tracked_items SET ${setClause.join(', ')} WHERE id = $${paramIndex}`,
+      values
+    )
+  }
+
+  /**
    * Get a single item by ID
    */
   static async getItemById(itemId: number, userId: string): Promise<TrackedItem | null> {

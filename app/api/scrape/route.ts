@@ -117,142 +117,156 @@ export async function POST(request: NextRequest) {
 
       console.log(`[SCRAPING] ${asin}: Seller detected: ${seller || 'Unknown'}`)
 
-      // Price extraction - prioritize the actual buy box price (what the customer sees)
-      // Amazon pages have multiple prices (variants, other sellers, etc.), so we target the buy box specifically
+      // Price extraction strategy:
+      // Amazon pages use an accordion with multiple buying options (Prime, regular, etc.)
+      // We prioritize: Prime price > regular "NEW" price > fallback patterns
       let price = 0
-      const allPricesFound: { price: number, type: string }[] = []
+      let priceSource = 'none'
 
-      // Pattern 1: corePrice_feature_div - the actual displayed buy box price
-      // This is the most reliable source as it's what Amazon renders as the main price
-      if (price === 0) {
-        const corePriceMatch = html.match(/id=["']corePrice_feature_div["'][^>]*>([\s\S]{1,5000})/)
-        if (corePriceMatch) {
-          const corePriceSection = corePriceMatch[1]
-          const coreOffscreen = corePriceSection.match(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/)
-          if (coreOffscreen) {
-            price = parseFloat(coreOffscreen[1].replace(/,/g, ''))
-            allPricesFound.push({ price, type: 'CorePrice' })
-            console.log(`[SCRAPING] ${asin}: Pattern 1 (corePrice_feature_div) = ${price}`)
+      // Helper to extract first a-offscreen price from an HTML section
+      const extractOffscreenPrice = (section: string): number => {
+        const match = section.match(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/)
+        return match ? parseFloat(match[1].replace(/,/g, '')) : 0
+      }
+
+      // === Primary: Extract from buying option accordion rows ===
+      // Amazon wraps prices in accordion rows with data-csa-c-buying-option-type
+      // PRIME_SAVINGS_UPSELL = Prime-exclusive price (preferred)
+      // NEW = regular buy price for all customers
+      // For each match, look forward up to 20000 chars for the first a-offscreen price
+      const buyingOptionPattern = /data-csa-c-buying-option-type=["'](PRIME_SAVINGS_UPSELL|NEW)["']/g
+      let optionMatch
+      let primePrice = 0
+      let newPrice = 0
+
+      while ((optionMatch = buyingOptionPattern.exec(html)) !== null) {
+        const optionType = optionMatch[1]
+        const section = html.substring(optionMatch.index, optionMatch.index + 20000)
+        const optionPrice = extractOffscreenPrice(section)
+
+        if (optionPrice > 0) {
+          if (optionType === 'PRIME_SAVINGS_UPSELL' && primePrice === 0) {
+            primePrice = optionPrice
+            console.log(`[SCRAPING] ${asin}: Prime price (PRIME_SAVINGS_UPSELL) = ${primePrice}`)
+          } else if (optionType === 'NEW' && newPrice === 0) {
+            newPrice = optionPrice
+            console.log(`[SCRAPING] ${asin}: Regular price (NEW) = ${newPrice}`)
           }
         }
       }
 
-      // Pattern 2: Twister plus price data - use the FIRST value (default variant buy box price)
-      // Do NOT pick the lowest; the first value corresponds to the currently selected/default variant
+      // Use Prime price if available, otherwise regular price
+      if (primePrice > 0) {
+        price = primePrice
+        priceSource = 'PrimeAccordion'
+      } else if (newPrice > 0) {
+        price = newPrice
+        priceSource = 'NewAccordion'
+      }
+
+      // === Fallback 1: corePrice_feature_div (when no accordion structure) ===
+      if (price === 0) {
+        const corePriceMatch = html.match(/id=["']corePrice_feature_div["'][^>]*>([\s\S]{1,5000})/)
+        if (corePriceMatch) {
+          const corePriceSection = corePriceMatch[1]
+          const corePrice = extractOffscreenPrice(corePriceSection)
+          if (corePrice > 0) {
+            price = corePrice
+            priceSource = 'CorePrice'
+            console.log(`[SCRAPING] ${asin}: Fallback 1 (corePrice_feature_div) = ${price}`)
+          }
+        }
+      }
+
+      // === Fallback 2: twister-plus-price-data-price (variant products) ===
       if (price === 0) {
         const twisterPriceMatch = html.match(/id=["']twister-plus-price-data-price["'][^>]*value=["']([\d,]+\.?\d*)["']/)
         if (twisterPriceMatch) {
           const twisterPrice = parseFloat(twisterPriceMatch[1].replace(/,/g, ''))
           if (twisterPrice > 0) {
             price = twisterPrice
-            allPricesFound.push({ price, type: 'TwisterPriceData' })
-            console.log(`[SCRAPING] ${asin}: Pattern 2 (twister-plus-price-data-price) = ${price}`)
+            priceSource = 'TwisterPriceData'
+            console.log(`[SCRAPING] ${asin}: Fallback 2 (twister-plus-price-data-price) = ${price}`)
           }
-        }
-        // Log all twister prices for debugging
-        const allTwisterPrices = html.match(/id=["']twister-plus-price-data-price["'][^>]*value=["']([\d,]+\.?\d*)["']/g)
-        if (allTwisterPrices && allTwisterPrices.length > 1) {
-          const values = allTwisterPrices.map(p => {
-            const m = p.match(/value=["']([\d,]+\.?\d*)["']/)
-            return m ? m[1] : 'N/A'
-          })
-          console.log(`[SCRAPING] ${asin}: All twister-plus-price-data-price values: ${values.join(', ')} (using first)`)
         }
       }
 
-      // Pattern 3: Twister section a-offscreen price (for products with size/color options)
+      // === Fallback 3: Twister section a-offscreen (size/color variant display) ===
       if (price === 0) {
         const twisterSectionMatch = html.match(/id=["']twister[^"']*["'][^>]*>(.{10,5000})/s)
         if (twisterSectionMatch) {
-          const twisterPriceMatch = twisterSectionMatch[1].match(/<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-          if (twisterPriceMatch) {
-            price = parseFloat(twisterPriceMatch[1].replace(/,/g, ''))
-            allPricesFound.push({ price, type: 'TwisterSection' })
-            console.log(`[SCRAPING] ${asin}: Pattern 3 (TwisterSection) = ${price}`)
+          const twisterPrice = extractOffscreenPrice(twisterSectionMatch[1])
+          if (twisterPrice > 0) {
+            price = twisterPrice
+            priceSource = 'TwisterSection'
+            console.log(`[SCRAPING] ${asin}: Fallback 3 (TwisterSection) = ${price}`)
           }
         }
       }
 
-      // Pattern 4: Price from #priceblock_dealprice (deal/promo price)
+      // === Fallback 4: priceblock_dealprice (deal/promo) ===
       if (price === 0) {
         const dealPriceMatch = html.match(/id=["']priceblock_dealprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (dealPriceMatch) {
           price = parseFloat(dealPriceMatch[1].replace(/,/g, ''))
-          allPricesFound.push({ price, type: 'DealPrice' })
+          priceSource = 'DealPrice'
         }
       }
 
-      // Pattern 5: Price from #priceblock_ourprice (regular price, no deal)
+      // === Fallback 5: priceblock_ourprice (regular price, no deal) ===
       if (price === 0) {
         const ourPriceMatch = html.match(/id=["']priceblock_ourprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (ourPriceMatch) {
           price = parseFloat(ourPriceMatch[1].replace(/,/g, ''))
-          allPricesFound.push({ price, type: 'OurPrice' })
+          priceSource = 'OurPrice'
         }
       }
 
-      // Pattern 6: apex-price-to-pay (alternative price display)
+      // === Fallback 6: apex-price-to-pay ===
       if (price === 0) {
         const apexPriceMatch = html.match(/class=["']apex-price-to-pay[^"']*["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (apexPriceMatch) {
           price = parseFloat(apexPriceMatch[1].replace(/,/g, ''))
-          allPricesFound.push({ price, type: 'ApexPrice' })
+          priceSource = 'ApexPrice'
         }
       }
 
-      // Pattern 7: Android price block (used on mobile)
-      if (price === 0) {
-        const androidPriceMatch = html.match(/id=["']android-buybox-price["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-        if (androidPriceMatch) {
-          price = parseFloat(androidPriceMatch[1].replace(/,/g, ''))
-          allPricesFound.push({ price, type: 'AndroidPrice' })
-        }
-      }
-
-      // Pattern 8: Inside #priceblock_saleprice (for sale items)
+      // === Fallback 7: priceblock_saleprice (sale items) ===
       if (price === 0) {
         const salePriceMatch = html.match(/id=["']priceblock_saleprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
         if (salePriceMatch) {
           price = parseFloat(salePriceMatch[1].replace(/,/g, ''))
-          allPricesFound.push({ price, type: 'SalePrice' })
+          priceSource = 'SalePrice'
         }
       }
 
-      // Pattern 9: Buybox section a-price-whole + a-price-fraction
+      // === Fallback 8: Buybox a-price-whole + a-price-fraction ===
       if (price === 0) {
         const priceSectionMatch = html.match(/<div[^>]*id=["']buybox[^>]*>.*?<span[^>]*class=["']a-price-whole["'][^>]*>(\d+[\d,]*)<\/span><span[^>]*class=["']a-price-fraction["'][^>]*>(\d+)<\/span>/s)
         if (priceSectionMatch) {
           const wholePart = parseFloat(priceSectionMatch[1].replace(/,/g, ''))
           const fractionPart = parseFloat(`0.${priceSectionMatch[2]}`)
           price = wholePart + fractionPart
-          allPricesFound.push({ price, type: 'BuyboxWholeFraction' })
+          priceSource = 'BuyboxWholeFraction'
         }
       }
 
-      // Pattern 10: Last resort - first a-offscreen price with sanity check
+      // === Fallback 9: Last resort - first a-offscreen with sanity check ===
       if (price === 0) {
         const offscreenMatch = html.match(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/s)
         if (offscreenMatch) {
           const extractedPrice = parseFloat(offscreenMatch[1].replace(/,/g, ''))
-          // Sanity check: reject obviously wrong prices (under $1 or over $10,000)
           if (extractedPrice >= 1 && extractedPrice < 10000) {
             price = extractedPrice
-            allPricesFound.push({ price, type: 'FallbackOffscreen' })
-            console.log(`[SCRAPING] ${asin}: Pattern 10 (fallback a-offscreen) = ${price}`)
+            priceSource = 'FallbackOffscreen'
+            console.log(`[SCRAPING] ${asin}: Fallback 9 (last resort a-offscreen) = ${price}`)
           }
         }
       }
 
-      console.log(`[SCRAPING] ${asin}: Final extracted price = ${price} (${currency}), Seller: ${seller || 'Unknown'}`)
-      if (allPricesFound.length > 0) {
-        console.log(`[SCRAPING] ${asin}: Price matched by: ${allPricesFound[0].type}, all found: ${allPricesFound.map(p => `${p.price} (${p.type})`).join(', ')}`)
-      }
-
-      // Log all a-offscreen prices for debugging
-      const allOffscreenPrices = html.match(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>(\$?[\d,]+\.?\d*)<\/span>/g)
-      if (allOffscreenPrices) {
-        const prices = allOffscreenPrices.map(p => p.replace(/<[^>]+>/g, '').replace(/^\$/, ''))
-        console.log(`[SCRAPING] ${asin}: ALL a-offscreen prices:`, prices.slice(0, 15))
+      console.log(`[SCRAPING] ${asin}: Final price = ${price} (${currency}), source = ${priceSource}, Seller: ${seller || 'Unknown'}`)
+      if (primePrice > 0 && newPrice > 0) {
+        console.log(`[SCRAPING] ${asin}: Prime=$${primePrice}, Regular=$${newPrice} (using ${priceSource})`)
       }
 
       // Image

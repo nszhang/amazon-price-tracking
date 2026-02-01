@@ -232,6 +232,12 @@ export class AlertsService {
       triggered_at: row.triggered_at?.toISOString(),
       acknowledged_at: row.acknowledged_at?.toISOString(),
       created_at: row.created_at?.toISOString(),
+      // Include item details for email service
+      tracked_items: {
+        title: row.item_title,
+        asin: row.item_asin,
+        amazon_url: row.item_url,
+      } as any,
     }
   }
 }

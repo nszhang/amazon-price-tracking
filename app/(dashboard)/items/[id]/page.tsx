@@ -195,7 +195,11 @@ export default function ItemDetailsPage() {
                 href={item.amazon_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50"
+                className="amazon-button"
+                style={{
+                  '--dark-hover-bg': '#3d4144',
+                  '--dark-hover-color': '#ffffff',
+                } as React.CSSProperties}
               >
                 View on Amazon
               </a>

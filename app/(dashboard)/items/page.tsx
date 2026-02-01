@@ -104,7 +104,7 @@ export default function ItemsPage() {
           asin: asinValue,
           isbn: isbnValue,
           amazon_url: amazonUrl,
-          amazon_domain: 'www.amazon.com',
+          amazon_domain: `www.amazon.${domain}`,
           title: 'Loading...',
           alert_threshold: 0,
         }),

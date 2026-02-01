@@ -10,9 +10,9 @@ export class ProfilesService {
    */
   static async getProfile(userId: string): Promise<UserProfile | null> {
     const result = await query(
-      `SELECT 
-        id, email, full_name, avatar_url, alert_email, timezone, 
-        currency, default_alert_threshold_percent, created_at, updated_at
+      `SELECT
+        id, email, full_name, avatar_url, alert_email, timezone, theme,
+        currency, default_alert_threshold_percent, default_amazon_domain, created_at, updated_at
        FROM users
        WHERE id = $1`,
       [userId]
@@ -30,9 +30,9 @@ export class ProfilesService {
    */
   static async getProfileByEmail(email: string): Promise<UserProfile | null> {
     const result = await query(
-      `SELECT 
-        id, email, full_name, avatar_url, alert_email, timezone, 
-        currency, default_alert_threshold_percent, created_at, updated_at
+      `SELECT
+        id, email, full_name, avatar_url, alert_email, timezone, theme,
+        currency, default_alert_threshold_percent, default_amazon_domain, created_at, updated_at
        FROM users
        WHERE email = $1`,
       [email.toLowerCase()]
@@ -93,6 +93,10 @@ export class ProfilesService {
       setClause.push(`timezone = $${paramIndex++}`)
       values.push(input.timezone)
     }
+    if (input.theme !== undefined) {
+      setClause.push(`theme = $${paramIndex++}`)
+      values.push(input.theme)
+    }
     if (input.preferences?.currency !== undefined) {
       setClause.push(`currency = $${paramIndex++}`)
       values.push(input.preferences.currency)
@@ -100,6 +104,10 @@ export class ProfilesService {
     if (input.preferences?.default_alert_threshold_percent !== undefined) {
       setClause.push(`default_alert_threshold_percent = $${paramIndex++}`)
       values.push(input.preferences.default_alert_threshold_percent)
+    }
+    if (input.preferences?.default_amazon_domain !== undefined) {
+      setClause.push(`default_amazon_domain = $${paramIndex++}`)
+      values.push(input.preferences.default_amazon_domain)
     }
 
     if (setClause.length === 0) {
@@ -156,9 +164,11 @@ export class ProfilesService {
       avatar_url: row.avatar_url,
       alert_email: row.alert_email,
       timezone: row.timezone,
+      theme: row.theme || 'system',
       preferences: {
         currency: row.currency,
         default_alert_threshold_percent: row.default_alert_threshold_percent,
+        default_amazon_domain: row.default_amazon_domain,
       },
       created_at: row.created_at?.toISOString(),
       updated_at: row.updated_at?.toISOString(),
