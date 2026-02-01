@@ -6,6 +6,14 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth/config'
 import { ItemsService } from '@/lib/services/database/items-service'
 
+interface BulkImportResult {
+  identifier: string
+  asin?: string
+  status: 'added' | 'skipped' | 'invalid'
+  message?: string
+  itemId?: number
+}
+
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -50,12 +58,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Process each identifier
-    const results: Array<{
-      identifier: string
-      status: 'added' | 'skipped' | 'invalid'
-      message?: string
-      itemId?: number
-    }> = []
+    const results: BulkImportResult[] = []
 
     for (const identifier of identifiers) {
       // Clean input: remove dashes
