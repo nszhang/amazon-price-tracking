@@ -106,6 +106,7 @@ export async function POST(request: NextRequest) {
       // Create the item
       try {
         const item = await ItemsService.createItem(session.user.id, {
+          url: amazonUrl,
           asin: asinValue,
           isbn: isbnValue,
           amazon_url: amazonUrl,
