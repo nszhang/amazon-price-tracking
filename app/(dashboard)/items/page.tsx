@@ -498,6 +498,7 @@ export default function ItemsPage() {
 
     return (
       <div key={category} className="mb-6">
+        {/* Category header with expand/collapse and select all */}
         <div className="bg-white rounded-t-lg shadow p-4">
           <div className="flex items-center justify-between">
             <button
@@ -517,7 +518,8 @@ export default function ItemsPage() {
               <span className="text-sm text-gray-500">({categoryItems.length})</span>
             </button>
 
-            {deleteMode && !isCollapsed && (
+            {/* Select All / Deselect All - always visible in delete mode */}
+            {deleteMode && (
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => allSelected ? deselectCategory(category) : selectCategory(category)}
@@ -526,7 +528,7 @@ export default function ItemsPage() {
                   {allSelected ? 'Deselect All' : 'Select All'}
                 </button>
                 <span className="text-sm text-gray-500">
-                  {categoryItems.filter(i => selectedIds.has(i.id)).length} selected
+                  {categoryItems.filter(i => selectedIds.has(i.id)).length} / {categoryItems.length}
                 </span>
               </div>
             )}
