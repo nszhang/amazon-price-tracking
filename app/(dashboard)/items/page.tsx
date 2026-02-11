@@ -80,6 +80,10 @@ export default function ItemsPage() {
   const [assigningCategory, setAssigningCategory] = useState(false)
   const [categoryProgress, setCategoryProgress] = useState('')
 
+  // Inline alert editing state
+  const [editingAlertId, setEditingAlertId] = useState<number | null>(null)
+  const [editingAlertValue, setEditingAlertValue] = useState('')
+
   // Bulk alert price state
   const [showAlertModal, setShowAlertModal] = useState(false)
   const [alertMode, setAlertMode] = useState<'fixed' | 'percent'>('percent')
@@ -496,6 +500,33 @@ export default function ItemsPage() {
     fetchItems(search)
   }
 
+  // Update alert threshold for a single item (inline edit)
+  const updateItemAlert = async (itemId: number, value: string) => {
+    const numValue = parseFloat(value)
+    if (isNaN(numValue) || numValue < 0) {
+      setEditingAlertId(null)
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/items/${itemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alert_threshold: numValue }),
+      })
+
+      if (response.ok) {
+        setItems(prev => prev.map(item =>
+          item.id === itemId ? { ...item, alert_threshold: numValue } : item
+        ))
+      }
+    } catch (err) {
+      console.error('[INLINE ALERT] Error updating item', itemId, err)
+    }
+
+    setEditingAlertId(null)
+  }
+
   // Set alert price for selected items
   const setAlertForSelected = async () => {
     if (selectedIds.size === 0) return
@@ -726,7 +757,37 @@ export default function ItemsPage() {
           <div className="mt-4 flex justify-between items-baseline">
             <div>
               <p className="text-2xl font-bold text-gray-900">${item.current_price.toFixed(2)}</p>
-              <p className="text-sm text-gray-500">Alert: ${item.alert_threshold.toFixed(2)}</p>
+              {editingAlertId === item.id ? (
+                <div className="flex items-center gap-1 mt-0.5" onClick={(e) => e.stopPropagation()}>
+                  <span className="text-sm text-gray-500">Alert: $</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editingAlertValue}
+                    onChange={(e) => setEditingAlertValue(e.target.value)}
+                    onBlur={() => updateItemAlert(item.id, editingAlertValue)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') updateItemAlert(item.id, editingAlertValue)
+                      if (e.key === 'Escape') setEditingAlertId(null)
+                    }}
+                    autoFocus
+                    className="w-20 px-1 py-0 text-sm border border-blue-400 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900"
+                  />
+                </div>
+              ) : (
+                <p
+                  className="text-sm text-gray-500 cursor-pointer hover:text-blue-600 hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setEditingAlertId(item.id)
+                    setEditingAlertValue(item.alert_threshold.toFixed(2))
+                  }}
+                  title="Click to edit alert price"
+                >
+                  Alert: ${item.alert_threshold.toFixed(2)}
+                </p>
+              )}
             </div>
             {!deleteMode && (
               <button
