@@ -49,15 +49,17 @@ export async function PATCH(
 
     const { id } = await params
     const body = await request.json()
+    console.log(`[PATCH /api/items/${id}] body:`, JSON.stringify(body))
     const item = await ItemsService.updateItem(
       parseInt(id),
       session.user.id,
       body
     )
+    console.log(`[PATCH /api/items/${id}] success, alert_threshold:`, item.alert_threshold)
 
     return NextResponse.json({ data: item })
   } catch (error: any) {
-    console.error('Error updating item:', error)
+    console.error(`[PATCH /api/items] Error:`, error)
     if (error.message === 'Item not found') {
       return NextResponse.json({ error: 'Item not found' }, { status: 404 })
     }
