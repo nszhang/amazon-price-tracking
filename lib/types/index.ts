@@ -51,6 +51,8 @@ export interface TrackedItem {
   first_tracked_at: string;
   last_checked_at?: string;
   last_price_drop_at?: string;
+  consecutive_captchas?: number;
+  scrape_retry_count?: number;
   created_at: string;
   updated_at: string;
 }

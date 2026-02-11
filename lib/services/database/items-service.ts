@@ -317,6 +317,85 @@ export class ItemsService {
     )
   }
 
+  /**
+   * Get next batch of items to scrape, ordered by priority
+   */
+  static async getNextBatch(batchSize: number): Promise<TrackedItem[]> {
+    const result = await query(
+      `SELECT
+        id, user_id, asin, isbn, amazon_url, amazon_domain, title, brand, category,
+        image_url, current_price, currency, alert_threshold, alert_threshold_percent,
+        alert_enabled, notes, first_tracked_at, last_checked_at, last_price_drop_at,
+        consecutive_captchas, created_at, updated_at
+       FROM tracked_items
+       ORDER BY
+        last_checked_at IS NULL DESC,
+        CASE WHEN title = 'Loading...' OR current_price = 0 THEN 0 ELSE 1 END,
+        CASE WHEN consecutive_captchas < 3 THEN 0 ELSE 1 END,
+        last_checked_at ASC
+       LIMIT $1`,
+      [batchSize]
+    )
+
+    return result.rows.map(row => this.mapRowToItem(row))
+  }
+
+  /**
+   * Mark an item as checked, advancing the round-robin pointer.
+   * If CAPTCHA, increment consecutive_captchas; otherwise reset to 0.
+   */
+  static async markChecked(itemId: number, wasCaptcha: boolean): Promise<void> {
+    if (wasCaptcha) {
+      await query(
+        `UPDATE tracked_items
+         SET last_checked_at = NOW(),
+             consecutive_captchas = COALESCE(consecutive_captchas, 0) + 1,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [itemId]
+      )
+    } else {
+      await query(
+        `UPDATE tracked_items
+         SET last_checked_at = NOW(),
+             consecutive_captchas = 0,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [itemId]
+      )
+    }
+  }
+
+  /**
+   * Get cycle status: aggregate stats for reporting
+   */
+  static async getCycleStatus(): Promise<{
+    total: number
+    neverChecked: number
+    captchaBlocked: number
+    oldestCheckedAt: string | null
+    newestCheckedAt: string | null
+  }> {
+    const result = await query(
+      `SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE last_checked_at IS NULL)::int AS never_checked,
+        COUNT(*) FILTER (WHERE consecutive_captchas >= 3)::int AS captcha_blocked,
+        MIN(last_checked_at) AS oldest_checked_at,
+        MAX(last_checked_at) AS newest_checked_at
+       FROM tracked_items`
+    )
+
+    const row = result.rows[0]
+    return {
+      total: row.total,
+      neverChecked: row.never_checked,
+      captchaBlocked: row.captcha_blocked,
+      oldestCheckedAt: row.oldest_checked_at?.toISOString() ?? null,
+      newestCheckedAt: row.newest_checked_at?.toISOString() ?? null,
+    }
+  }
+
   private static mapRowToItem(row: any): TrackedItem {
     return {
       id: row.id,
@@ -338,8 +417,63 @@ export class ItemsService {
       first_tracked_at: row.first_tracked_at?.toISOString(),
       last_checked_at: row.last_checked_at?.toISOString(),
       last_price_drop_at: row.last_price_drop_at?.toISOString(),
+      consecutive_captchas: row.consecutive_captchas ?? 0,
+      scrape_retry_count: row.scrape_retry_count ?? 0,
       created_at: row.created_at?.toISOString(),
       updated_at: row.updated_at?.toISOString(),
     }
+  }
+
+  /**
+   * Get items stuck in "Loading..." state for retry
+   */
+  static async getLoadingItems(limit: number = 10): Promise<TrackedItem[]> {
+    const result = await query(
+      `SELECT
+        id, user_id, asin, isbn, amazon_url, amazon_domain, title, brand, category,
+        image_url, current_price, currency, alert_threshold, alert_threshold_percent,
+        alert_enabled, notes, first_tracked_at, last_checked_at, last_price_drop_at,
+        consecutive_captchas, scrape_retry_count, created_at, updated_at
+       FROM tracked_items
+       WHERE title = 'Loading...'
+       ORDER BY scrape_retry_count ASC, created_at ASC
+       LIMIT $1`,
+      [limit]
+    )
+
+    return result.rows.map(row => this.mapRowToItem(row))
+  }
+
+  /**
+   * Increment retry count for a loading item
+   */
+  static async incrementRetryCount(itemId: number): Promise<void> {
+    await query(
+      `UPDATE tracked_items
+       SET scrape_retry_count = COALESCE(scrape_retry_count, 0) + 1,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [itemId]
+    )
+  }
+
+  /**
+   * Reset retry count when item successfully loads
+   */
+  static async resetRetryCount(itemId: number): Promise<void> {
+    await query(
+      `UPDATE tracked_items
+       SET scrape_retry_count = 0,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [itemId]
+    )
+  }
+
+  /**
+   * Delete item by ID (for cleanup of failed items)
+   */
+  static async deleteItemById(itemId: number): Promise<void> {
+    await query('DELETE FROM tracked_items WHERE id = $1', [itemId])
   }
 }

@@ -20,10 +20,26 @@ const FETCH_HEADERS = {
   'DNT': '1',
 }
 
+// Decode HTML entities (e.g. &amp; &#39; &eacute;)
+function decodeEntities(str: string): string {
+  const entities: Record<string, string> = {
+    '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'",
+    '&eacute;': 'é', '&egrave;': 'è', '&ecirc;': 'ê', '&euml;': 'ë',
+    '&agrave;': 'à', '&aacute;': 'á', '&acirc;': 'â', '&auml;': 'ä',
+    '&ograve;': 'ò', '&oacute;': 'ó', '&ocirc;': 'ô', '&ouml;': 'ö',
+    '&ugrave;': 'ù', '&uacute;': 'ú', '&ucirc;': 'û', '&uuml;': 'ü',
+    '&ccedil;': 'ç', '&ntilde;': 'ñ', '&nbsp;': ' ', '&ndash;': '–', '&mdash;': '—',
+  }
+  return str
+    .replace(/&[a-z]+;/gi, m => entities[m.toLowerCase()] || m)
+    .replace(/&#(\d+);?/g, (_, n) => String.fromCharCode(parseInt(n)))
+    .replace(/&#x([0-9a-f]+);?/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+}
+
 function extractProductData(html: string, asin: string, domain: string) {
   // Title
   const titleMatch = html.match(/<span id="productTitle"[^>]*>(.+?)<\/span>/s)
-  const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'Unknown Product'
+  const title = titleMatch ? decodeEntities(titleMatch[1].replace(/<[^>]+>/g, '').trim()) : 'Unknown Product'
 
   // Currency detection
   let currency = 'USD'
@@ -146,13 +162,30 @@ function extractProductData(html: string, asin: string, domain: string) {
     }
   }
 
-  // Image
-  const imageMatch = html.match(/<img id="landingImage"[^>]*src="([^"]+)"/)
-  const image = imageMatch ? imageMatch[1].replace(/^http:/, 'https:') : null
+  // Image - try data-a-dynamic-image first (lazy-loaded), then src
+  let image: string | null = null
+  const dynamicImageMatch = html.match(/id="landingImage"[^>]*data-a-dynamic-image="[^"]*?(https:\/\/m\.media-amazon\.com\/images\/[^&"]+)/)
+  if (dynamicImageMatch) {
+    image = dynamicImageMatch[1].replace(/&amp;/g, '&').replace(/^http:/, 'https:')
+  } else {
+    const srcImageMatch = html.match(/<img[^>]*id="landingImage"[^>]*src="([^"]+)"/)
+    image = srcImageMatch ? srcImageMatch[1].replace(/^http:/, 'https:') : null
+  }
 
-  // Brand
-  const brandMatch = html.match(/<a id="bylineInfo"[^>]*>(.+?)<\/a>/s)
-  const brand = brandMatch ? brandMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : null
+  // Brand / Author - try bylineInfo section with author spans first
+  let brand: string | null = null
+  const bylineSection = html.match(/id="bylineInfo"[^>]*>([\s\S]{1,5000}?)<\/div>/)
+  if (bylineSection) {
+    const authorLinks = [...bylineSection[1].matchAll(/<span[^>]*class="author[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/g)]
+    if (authorLinks.length > 0) {
+      brand = decodeEntities(authorLinks.map(m => m[1].trim()).join(', '))
+    }
+  }
+  // Fallback: <a id="bylineInfo"> (non-book products)
+  if (!brand) {
+    const brandMatch = html.match(/<a id="bylineInfo"[^>]*>(.+?)<\/a>/s)
+    brand = brandMatch ? decodeEntities(brandMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()) : null
+  }
 
   // Availability
   const availabilityMatch = html.match(/<span id="availability"[^>]*>(.+?)<\/span>/s)
@@ -171,21 +204,33 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // Read config from env vars
+  const batchSize = parseInt(process.env.SCRAPE_BATCH_SIZE || '5', 10)
+  const delayMinMs = parseInt(process.env.SCRAPE_DELAY_MIN_MS || '12000', 10)
+  const delayMaxMs = parseInt(process.env.SCRAPE_DELAY_MAX_MS || '20000', 10)
+  const captchaBackoffMs = parseInt(process.env.SCRAPE_CAPTCHA_BACKOFF_MS || '45000', 10)
+  const maxConsecutiveCaptchas = parseInt(process.env.SCRAPE_MAX_CONSECUTIVE_CAPTCHAS || '2', 10)
+
   try {
-    const items = await ItemsService.getAllItems()
+    const items = await ItemsService.getNextBatch(batchSize)
 
     if (items.length === 0) {
-      return NextResponse.json({ success: true, message: 'No items to scrape', scraped: 0 })
+      const cycleStatus = await ItemsService.getCycleStatus()
+      return NextResponse.json({ success: true, message: 'No items to scrape', scraped: 0, cycleStatus })
     }
 
-    console.log(`[CRON] Starting price scrape for ${items.length} items`)
+    console.log(`[CRON] Batch scrape: ${items.length} items (batch size ${batchSize})`)
 
     let successCount = 0
     let failCount = 0
-    let skipCount = 0
+    let captchaCount = 0
+    let consecutiveCaptchasInRun = 0
+    let aborted = false
     const results: { asin: string, status: string, price?: number, source?: string }[] = []
 
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+
       try {
         const domain = item.amazon_domain || 'ca'
         const amazonUrl = `https://www.amazon.${domain}/dp/${item.asin}`
@@ -198,19 +243,45 @@ export async function GET(request: NextRequest) {
 
         const html = await response.text()
 
-        // Skip CAPTCHAs
+        // Handle CAPTCHA
         if (html.includes('validateCaptcha') || html.includes('opfcaptcha')) {
-          console.warn(`[CRON] CAPTCHA for ${item.asin}, skipping`)
-          skipCount++
+          console.warn(`[CRON] CAPTCHA for ${item.asin} (consecutive in DB: ${(item.consecutive_captchas ?? 0) + 1})`)
+          captchaCount++
+          consecutiveCaptchasInRun++
+
+          // Mark checked with CAPTCHA flag (advances round-robin pointer)
+          await ItemsService.markChecked(item.id, true)
+
+          // Record rate_limited in price_history
+          await PriceHistoryService.addPriceEntry({
+            item_id: item.id,
+            price: item.current_price || 0,
+            in_stock: true,
+            scrape_status: 'rate_limited',
+            error_message: 'CAPTCHA detected',
+          })
+
           results.push({ asin: item.asin, status: 'captcha' })
-          // Delay longer after captcha to back off
-          await new Promise(r => setTimeout(r, 5000))
+
+          // Abort batch if too many consecutive CAPTCHAs in this run
+          if (consecutiveCaptchasInRun >= maxConsecutiveCaptchas) {
+            console.warn(`[CRON] ${consecutiveCaptchasInRun} consecutive CAPTCHAs in run, aborting batch`)
+            aborted = true
+            break
+          }
+
+          // Back off after CAPTCHA
+          await new Promise(r => setTimeout(r, captchaBackoffMs))
           continue
         }
+
+        // Reset consecutive CAPTCHA counter on non-CAPTCHA response
+        consecutiveCaptchasInRun = 0
 
         if (!response.ok) {
           console.warn(`[CRON] HTTP ${response.status} for ${item.asin}`)
           failCount++
+          await ItemsService.markChecked(item.id, false)
           results.push({ asin: item.asin, status: `http_${response.status}` })
           await new Promise(r => setTimeout(r, 2000))
           continue
@@ -235,6 +306,9 @@ export async function GET(request: NextRequest) {
 
         await ItemsService.updateItemById(item.id, updateData)
 
+        // markChecked resets consecutive_captchas and advances last_checked_at
+        await ItemsService.markChecked(item.id, false)
+
         // Add price history
         if (product.price > 0) {
           await PriceHistoryService.addPriceEntry({
@@ -252,25 +326,36 @@ export async function GET(request: NextRequest) {
           console.warn(`[CRON] ${item.asin}: could not extract price`)
         }
 
-        // Delay between requests to avoid being blocked
-        await new Promise(r => setTimeout(r, 2000 + Math.random() * 2000))
+        // Delay between requests (configurable)
+        if (i < items.length - 1) {
+          await new Promise(r => setTimeout(r, delayMinMs + Math.random() * (delayMaxMs - delayMinMs)))
+        }
       } catch (error: any) {
         failCount++
         const msg = error.name === 'AbortError' ? 'timeout' : error.message
+        await ItemsService.markChecked(item.id, false)
         results.push({ asin: item.asin, status: `error: ${msg}` })
         console.error(`[CRON] Error scraping ${item.asin}:`, msg)
-        await new Promise(r => setTimeout(r, 2000))
+        await new Promise(r => setTimeout(r, delayMinMs))
       }
     }
 
-    console.log(`[CRON] Done: ${successCount} success, ${failCount} failed, ${skipCount} skipped`)
+    const cycleStatus = await ItemsService.getCycleStatus()
+
+    console.log(`[CRON] Batch done: ${successCount} success, ${failCount} failed, ${captchaCount} captcha${aborted ? ' (ABORTED)' : ''}`)
+    console.log(`[CRON] Cycle: ${cycleStatus.total} total, ${cycleStatus.neverChecked} never checked, ${cycleStatus.captchaBlocked} captcha-blocked`)
 
     return NextResponse.json({
       success: true,
-      total: items.length,
-      scraped: successCount,
-      failed: failCount,
-      skipped: skipCount,
+      batch: {
+        size: batchSize,
+        processed: results.length,
+        success: successCount,
+        failed: failCount,
+        captcha: captchaCount,
+        aborted,
+      },
+      cycleStatus,
       results,
     })
   } catch (error) {

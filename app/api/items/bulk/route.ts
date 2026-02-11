@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth/config'
 import { ItemsService } from '@/lib/services/database/items-service'
+import { isbn13ToIsbn10 } from '@/lib/utils/isbn'
 
 interface BulkImportResult {
   identifier: string
@@ -15,14 +16,17 @@ interface BulkImportResult {
 }
 
 export async function POST(request: NextRequest) {
+  console.log('[BULK IMPORT] POST /api/items/bulk called')
   try {
     const session = await getServerSession(authOptions)
+    console.log('[BULK IMPORT] Session:', session?.user?.id ? `user ${session.user.id}` : 'null')
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const formData = await request.formData()
+    console.log('[BULK IMPORT] FormData parsed')
     const file = formData.get('file') as File
     const amazonDomain = (formData.get('amazon_domain') as string) || 'ca'
 
@@ -49,6 +53,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    console.log(`[BULK IMPORT] Found ${identifiers.length} identifiers, domain=${amazonDomain}`)
 
     if (identifiers.length > 100) {
       return NextResponse.json(
@@ -86,9 +92,15 @@ export async function POST(request: NextRequest) {
         asinValue = cleaned
         isbnValue = isValidIsbn10 ? cleaned : undefined
       } else {
-        // ISBN-13: use first 10 chars as ASIN, store full as ISBN
-        asinValue = cleaned.substring(0, 10)
+        // ISBN-13: convert to ISBN-10 for the ASIN field
         isbnValue = cleaned
+        const isbn10 = isbn13ToIsbn10(cleaned)
+        if (isbn10) {
+          asinValue = isbn10
+        } else {
+          // 979-prefix or invalid: use full ISBN-13
+          asinValue = cleaned
+        }
       }
 
       // Build Amazon URL
@@ -113,7 +125,7 @@ export async function POST(request: NextRequest) {
           asin: asinValue,
           isbn: isbnValue,
           amazon_url: amazonUrl,
-          amazon_domain: `www.amazon.${amazonDomain}`,
+          amazon_domain: amazonDomain,
           title: 'Loading...',
           current_price: 0,
           alert_threshold: 0,
@@ -138,6 +150,8 @@ export async function POST(request: NextRequest) {
     const added = results.filter(r => r.status === 'added')
     const skipped = results.filter(r => r.status === 'skipped')
     const invalid = results.filter(r => r.status === 'invalid')
+
+    console.log(`[BULK IMPORT] Done: ${added.length} added, ${skipped.length} skipped, ${invalid.length} invalid`)
 
     return NextResponse.json({
       success: true,

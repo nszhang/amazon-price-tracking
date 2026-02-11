@@ -1,9 +1,10 @@
 'use client'
 
 // Price History Chart Component
-// Displays price trends over time using Recharts
+// Displays price trends over time with configurable time range
+// X-axis is always date-based: spans the full selected period so gaps are visible
 
-import { useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import type { PriceHistory } from '@/lib/types'
 import { formatPrice, formatDate } from '@/lib/utils/formatters'
 
@@ -12,20 +13,69 @@ interface PriceChartProps {
   currency?: string
 }
 
+type TimeRange = '1m' | '3m' | 'ytd' | '1y' | '5y' | 'all'
+
+const TIME_RANGES: { value: TimeRange; label: string }[] = [
+  { value: '1m', label: '1M' },
+  { value: '3m', label: '3M' },
+  { value: 'ytd', label: 'YTD' },
+  { value: '1y', label: '1Y' },
+  { value: '5y', label: '5Y' },
+  { value: 'all', label: 'All' },
+]
+
+function getRangeCutoff(range: TimeRange): Date | null {
+  if (range === 'all') return null
+  const now = new Date()
+  if (range === 'ytd') return new Date(now.getFullYear(), 0, 1)
+  const months = { '1m': 1, '3m': 3, '1y': 12, '5y': 60 }[range]
+  const cutoff = new Date()
+  cutoff.setMonth(cutoff.getMonth() - months)
+  return cutoff
+}
+
+function formatAxisDate(date: Date, range: TimeRange): string {
+  const month = date.toLocaleString('en-US', { month: 'short' })
+  const year = date.getFullYear()
+  if (range === '1m') return `${month} ${date.getDate()}`
+  if (range === '3m' || range === 'ytd') return `${month} ${year}`
+  return `${month} ${year}`
+}
+
+const SVG_WIDTH = 1000
+
 export function PriceChart({ history, currency = 'USD' }: PriceChartProps) {
-  // Transform history data for the chart
-  const chartData = useMemo(() => {
+  const [timeRange, setTimeRange] = useState<TimeRange>('all')
+
+  // All successful history entries, oldest first
+  const allData = useMemo(() => {
     return history
       .filter(h => h.scrape_status === 'success')
       .map(h => ({
         date: formatDate(new Date(h.scraped_at)),
+        ts: new Date(h.scraped_at).getTime(),
         price: h.price,
         inStock: h.in_stock,
       }))
-      .reverse() // Show oldest to newest
+      .reverse()
   }, [history])
 
-  // Calculate stats
+  // Time window: [rangeStart, rangeEnd] in ms
+  const { rangeStart, rangeEnd } = useMemo(() => {
+    const end = Date.now()
+    const cutoff = getRangeCutoff(timeRange)
+    if (cutoff) return { rangeStart: cutoff.getTime(), rangeEnd: end }
+    // "all": span from first data point to now
+    if (allData.length > 0) return { rangeStart: allData[0].ts, rangeEnd: end }
+    return { rangeStart: end - 30 * 86400000, rangeEnd: end }
+  }, [timeRange, allData])
+
+  // Filtered by selected time range
+  const chartData = useMemo(() => {
+    return allData.filter(d => d.ts >= rangeStart && d.ts <= rangeEnd)
+  }, [allData, rangeStart, rangeEnd])
+
+  // Calculate stats from the visible range
   const stats = useMemo(() => {
     if (chartData.length === 0) return null
 
@@ -34,11 +84,34 @@ export function PriceChart({ history, currency = 'USD' }: PriceChartProps) {
     const max = Math.max(...prices)
     const avg = prices.reduce((a, b) => a + b, 0) / prices.length
     const current = prices[prices.length - 1]
+    const yMax = Math.ceil(max * 1.1)
 
-    return { min, max, avg, current }
+    return { min, max, avg, current, yMax }
   }, [chartData])
 
-  if (chartData.length === 0) {
+  // Map a timestamp to an SVG x coordinate
+  const timeSpan = rangeEnd - rangeStart || 1
+  const toX = (ts: number) => ((ts - rangeStart) / timeSpan) * SVG_WIDTH
+
+  // X-axis tick labels
+  const xTicks = useMemo(() => {
+    const ticks: { x: number; label: string }[] = []
+    const startDate = new Date(rangeStart)
+    const endDate = new Date(rangeEnd)
+
+    ticks.push({ x: 0, label: formatAxisDate(startDate, timeRange) })
+
+    // Add ~3 evenly-spaced intermediate ticks
+    for (let i = 1; i <= 3; i++) {
+      const t = rangeStart + (timeSpan * i) / 4
+      ticks.push({ x: toX(t), label: formatAxisDate(new Date(t), timeRange) })
+    }
+
+    ticks.push({ x: SVG_WIDTH, label: formatAxisDate(endDate, timeRange) })
+    return ticks
+  }, [rangeStart, rangeEnd, timeSpan, timeRange])
+
+  if (allData.length === 0) {
     return (
       <div className="flex items-center justify-center h-64 bg-gray-50 rounded-lg">
         <p className="text-gray-500">No price history available</p>
@@ -46,8 +119,28 @@ export function PriceChart({ history, currency = 'USD' }: PriceChartProps) {
     )
   }
 
+  // Use stats from visible data for y-axis, or fall back to all-data stats
+  const yMax = stats?.yMax ?? Math.ceil(Math.max(...allData.map(d => d.price)) * 1.1)
+
   return (
     <div className="space-y-4">
+      {/* Time Range Selector */}
+      <div className="flex items-center gap-1">
+        {TIME_RANGES.map(r => (
+          <button
+            key={r.value}
+            onClick={() => setTimeRange(r.value)}
+            className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+              timeRange === r.value
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
       {/* Stats */}
       {stats && (
         <div className="grid grid-cols-4 gap-4">
@@ -70,17 +163,17 @@ export function PriceChart({ history, currency = 'USD' }: PriceChartProps) {
         </div>
       )}
 
-      {/* Simple CSS Chart (fallback if Recharts not available) */}
+      {/* Chart */}
       <div className="bg-white border rounded-lg p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Price History</h3>
+
         <div className="relative h-64">
           {/* Y-axis labels */}
-          {stats && (
-            <div className="absolute left-0 top-0 bottom-0 w-16 flex flex-col justify-between text-xs text-gray-500">
-              <span>{formatPrice(stats.max, currency)}</span>
-              <span>{formatPrice(stats.min, currency)}</span>
-            </div>
-          )}
+          <div className="absolute left-0 top-0 bottom-0 w-16 flex flex-col justify-between text-xs text-gray-500">
+            <span>{formatPrice(yMax, currency)}</span>
+            <span>{formatPrice(yMax / 2, currency)}</span>
+            <span>{formatPrice(0, currency)}</span>
+          </div>
 
           {/* Chart area */}
           <div className="ml-20 h-full relative">
@@ -95,27 +188,28 @@ export function PriceChart({ history, currency = 'USD' }: PriceChartProps) {
             {/* SVG Line Chart */}
             <svg
               className="absolute inset-0 w-full h-full"
-              viewBox={`0 0 ${chartData.length * 50} 100`}
+              viewBox={`0 0 ${SVG_WIDTH} 100`}
               preserveAspectRatio="none"
             >
               {/* Line */}
-              <polyline
-                fill="none"
-                stroke="#3b82f6"
-                strokeWidth="2"
-                points={chartData.map((d, i) => {
-                  if (!stats) return ''
-                  const x = (i / (chartData.length - 1)) * (chartData.length * 50)
-                  const y = 100 - ((d.price - stats.min) / (stats.max - stats.min || 1)) * 100
-                  return `${x},${y}`
-                }).join(' ')}
-              />
+              {chartData.length > 1 && (
+                <polyline
+                  fill="none"
+                  stroke="#3b82f6"
+                  strokeWidth="2"
+                  vectorEffect="non-scaling-stroke"
+                  points={chartData.map(d => {
+                    const x = toX(d.ts)
+                    const y = 100 - (d.price / yMax) * 100
+                    return `${x},${y}`
+                  }).join(' ')}
+                />
+              )}
 
               {/* Data points */}
               {chartData.map((d, i) => {
-                if (!stats) return null
-                const x = (i / (chartData.length - 1)) * (chartData.length * 50)
-                const y = 100 - ((d.price - stats.min) / (stats.max - stats.min || 1)) * 100
+                const x = toX(d.ts)
+                const y = 100 - (d.price / yMax) * 100
                 return (
                   <circle
                     key={i}
@@ -123,7 +217,8 @@ export function PriceChart({ history, currency = 'USD' }: PriceChartProps) {
                     cy={y}
                     r="3"
                     fill="#3b82f6"
-                    className="hover:r-5 transition-all cursor-pointer"
+                    vectorEffect="non-scaling-stroke"
+                    className="cursor-pointer"
                   >
                     <title>
                       {d.date}: {formatPrice(d.price, currency)}
@@ -136,10 +231,16 @@ export function PriceChart({ history, currency = 'USD' }: PriceChartProps) {
         </div>
 
         {/* X-axis labels */}
-        <div className="ml-20 mt-2 flex justify-between text-xs text-gray-500">
-          <span>{chartData[0]?.date}</span>
-          <span>{chartData[Math.floor(chartData.length / 2)]?.date}</span>
-          <span>{chartData[chartData.length - 1]?.date}</span>
+        <div className="ml-20 mt-2 relative h-4">
+          {xTicks.map((tick, i) => (
+            <span
+              key={i}
+              className="absolute text-xs text-gray-500 -translate-x-1/2"
+              style={{ left: `${(tick.x / SVG_WIDTH) * 100}%` }}
+            >
+              {tick.label}
+            </span>
+          ))}
         </div>
       </div>
 

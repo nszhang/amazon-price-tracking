@@ -53,6 +53,23 @@ body {
 .dark .text-gray-800 { color: #f7f9f9 !important; }
 .dark .text-gray-900 { color: #f7f9f9 !important; }
 
+/* Red colors in dark mode */
+.dark .bg-red-50 { background-color: #2d1215 !important; }
+.dark .bg-red-100 { background-color: #3d1519 !important; }
+.dark .bg-red-600 { background-color: #dc2626 !important; }
+.dark .bg-red-700 { background-color: #b91c1c !important; }
+.dark .border-red-300 { border-color: #7f1d1d !important; }
+.dark .text-red-600 { color: #f87171 !important; }
+.dark .text-red-700 { color: #fca5a5 !important; }
+
+/* Green colors in dark mode */
+.dark .bg-green-100 { background-color: #14532d !important; }
+.dark .text-green-800 { color: #86efac !important; }
+
+/* Yellow colors in dark mode */
+.dark .bg-yellow-100 { background-color: #422006 !important; }
+.dark .text-yellow-800 { color: #fde68a !important; }
+
 /* Blue colors in dark mode - change to gray */
 .dark .text-blue-50 { color: #71767b !important; }
 .dark .text-blue-100 { color: #8b98a5 !important; }

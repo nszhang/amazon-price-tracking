@@ -10,6 +10,7 @@ interface TrackedItem {
   asin: string
   isbn?: string
   title: string
+  brand?: string
   current_price: number
   alert_threshold: number
   amazon_url: string
@@ -31,7 +32,7 @@ const AMAZON_DOMAINS = [
 ] as const
 
 type CategoryFilter = 'all' | 'Book' | 'Non-Book'
-type SortOption = 'newest' | 'price-low' | 'price-high' | 'name'
+type SortOption = 'newest' | 'oldest' | 'price-low' | 'price-high' | 'name-asc' | 'name-desc'
 
 interface BulkImportResult {
   identifier: string
@@ -54,7 +55,12 @@ export default function ItemsPage() {
   // Search and filter state
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
-  const [sortBy, setSortBy] = useState<SortOption>('newest')
+  const [sortBy, setSortBy] = useState<SortOption>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('itemsSortBy') as SortOption) || 'newest'
+    }
+    return 'newest'
+  })
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
 
   // Bulk import state
@@ -63,11 +69,23 @@ export default function ItemsPage() {
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importDomain, setImportDomain] = useState('ca')
   const [importResults, setImportResults] = useState<BulkImportResult[] | null>(null)
+  const [importProgress, setImportProgress] = useState<string>('') // Progress message
   const [hasItems, setHasItems] = useState(false) // Track if user has any items
 
-  // Selection state for bulk deletion
+  // Selection state for bulk operations
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleteMode, setDeleteMode] = useState(false)
+  const [refreshingSelected, setRefreshingSelected] = useState(false)
+  const [refreshProgress, setRefreshProgress] = useState('')
+  const [assigningCategory, setAssigningCategory] = useState(false)
+  const [categoryProgress, setCategoryProgress] = useState('')
+
+  // Bulk alert price state
+  const [showAlertModal, setShowAlertModal] = useState(false)
+  const [alertMode, setAlertMode] = useState<'fixed' | 'percent'>('percent')
+  const [alertValue, setAlertValue] = useState('')
+  const [settingAlert, setSettingAlert] = useState(false)
+  const [alertProgress, setAlertProgress] = useState('')
 
   // Fetch items on mount
   const fetchItems = async (searchQuery?: string) => {
@@ -116,14 +134,20 @@ export default function ItemsPage() {
       case 'newest':
         filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
         break
+      case 'oldest':
+        filtered.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        break
       case 'price-low':
         filtered.sort((a, b) => a.current_price - b.current_price)
         break
       case 'price-high':
         filtered.sort((a, b) => b.current_price - a.current_price)
         break
-      case 'name':
+      case 'name-asc':
         filtered.sort((a, b) => a.title.localeCompare(b.title))
+        break
+      case 'name-desc':
+        filtered.sort((a, b) => b.title.localeCompare(a.title))
         break
     }
 
@@ -172,6 +196,11 @@ export default function ItemsPage() {
     }
   }
 
+  // Persist sort option
+  useEffect(() => {
+    localStorage.setItem('itemsSortBy', sortBy)
+  }, [sortBy])
+
   // Debounced search
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -209,7 +238,7 @@ export default function ItemsPage() {
       const amazonUrl = url.startsWith('http') ? url : `https://www.amazon.${domain}/dp/${identifier}`
 
       // Determine ASIN and ISBN values
-      // For ISBN-13, use first 10 chars as ASIN, store full value as ISBN
+      // For ISBN-13 (978-prefix), convert to ISBN-10 for the ASIN field
       // For ASIN or ISBN-10, use as-is for ASIN field
       let asinValue: string
       let isbnValue: string | undefined
@@ -218,9 +247,22 @@ export default function ItemsPage() {
         asinValue = identifier
         isbnValue = isValidIsbn10 ? identifier : undefined
       } else {
-        // ISBN-13: use first 10 chars as ASIN, store full as ISBN
-        asinValue = identifier.substring(0, 10)
+        // ISBN-13: convert to ISBN-10 for ASIN
         isbnValue = identifier
+        if (identifier.startsWith('978')) {
+          // Convert ISBN-13 to ISBN-10
+          const body = identifier.substring(3, 12)
+          let sum = 0
+          for (let i = 0; i < 9; i++) {
+            sum += (10 - i) * parseInt(body[i])
+          }
+          const remainder = (11 - (sum % 11)) % 11
+          const checkChar = remainder === 10 ? 'X' : remainder.toString()
+          asinValue = body + checkChar
+        } else {
+          // 979-prefix or other: use full ISBN-13
+          asinValue = identifier
+        }
       }
 
       // Create item via API
@@ -231,7 +273,7 @@ export default function ItemsPage() {
           asin: asinValue,
           isbn: isbnValue,
           amazon_url: amazonUrl,
-          amazon_domain: `www.amazon.${domain}`,
+          amazon_domain: domain,
           title: 'Loading...',
           alert_threshold: 0,
         }),
@@ -283,8 +325,6 @@ export default function ItemsPage() {
 
   // Delete item
   const deleteItem = async (id: number) => {
-    if (!confirm('Are you sure you want to stop tracking this item?')) return
-
     try {
       const res = await fetch(`/api/items/${id}`, {
         method: 'DELETE'
@@ -313,8 +353,9 @@ export default function ItemsPage() {
     })
   }
 
-  // Select all items in a category
+  // Select all items in a category (auto-enters delete mode)
   const selectCategory = (category: string) => {
+    if (!deleteMode) setDeleteMode(true)
     const categoryItems = groupedItems[category] || []
     const categoryIds = new Set(categoryItems.map(i => i.id))
     setSelectedIds(prev => new Set([...prev, ...categoryIds]))
@@ -355,6 +396,180 @@ export default function ItemsPage() {
     }
   }
 
+  // Refresh selected items (for retrying "Loading..." items)
+  const refreshSelected = async () => {
+    if (selectedIds.size === 0) return
+
+    setRefreshingSelected(true)
+    setError('')
+
+    const selectedItems = items.filter(i => selectedIds.has(i.id))
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < selectedItems.length; i++) {
+      const item = selectedItems[i]
+      setRefreshProgress(`Refreshing ${i + 1}/${selectedItems.length}: ${item.asin}`)
+
+      try {
+        const response = await fetch('/api/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: item.amazon_url,
+            asin: item.asin,
+            domain: item.amazon_url.match(/amazon\.([a-z.]+)\//)?.[1] || 'ca',
+          }),
+        })
+
+        if (response.ok) {
+          successCount++
+        } else {
+          failCount++
+        }
+      } catch (err) {
+        console.error('[REFRESH] Error refreshing', item.asin, err)
+        failCount++
+      }
+    }
+
+    setRefreshProgress('')
+    setRefreshingSelected(false)
+    setSelectedIds(new Set())
+    setDeleteMode(false)
+
+    if (successCount > 0) {
+      setSuccess(`Refreshed ${successCount} item${successCount > 1 ? 's' : ''}${failCount > 0 ? `, ${failCount} failed` : ''}`)
+    } else if (failCount > 0) {
+      setError(`Failed to refresh ${failCount} item${failCount > 1 ? 's' : ''}`)
+    }
+
+    // Refresh the items list
+    fetchItems(search)
+  }
+
+  // Set category for selected items
+  const setCategoryForSelected = async (category: 'Book' | 'Non-Book') => {
+    if (selectedIds.size === 0) return
+
+    setAssigningCategory(true)
+    setError('')
+
+    const selectedItemIds = Array.from(selectedIds)
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < selectedItemIds.length; i++) {
+      const itemId = selectedItemIds[i]
+      setCategoryProgress(`Setting category ${i + 1}/${selectedItemIds.length}`)
+
+      try {
+        const response = await fetch(`/api/items/${itemId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category }),
+        })
+
+        if (response.ok) {
+          successCount++
+        } else {
+          failCount++
+        }
+      } catch (err) {
+        console.error('[SET CATEGORY] Error for item', itemId, err)
+        failCount++
+      }
+    }
+
+    setCategoryProgress('')
+    setAssigningCategory(false)
+    setSelectedIds(new Set())
+    setDeleteMode(false)
+
+    if (successCount > 0) {
+      setSuccess(`Set ${successCount} item${successCount > 1 ? 's' : ''} to ${category}${failCount > 0 ? `, ${failCount} failed` : ''}`)
+    } else if (failCount > 0) {
+      setError(`Failed to set category for ${failCount} item${failCount > 1 ? 's' : ''}`)
+    }
+
+    // Refresh the items list
+    fetchItems(search)
+  }
+
+  // Set alert price for selected items
+  const setAlertForSelected = async () => {
+    if (selectedIds.size === 0) return
+
+    const numValue = parseFloat(alertValue)
+    if (isNaN(numValue) || numValue < 0) {
+      setError('Please enter a valid number')
+      return
+    }
+
+    if (alertMode === 'percent' && numValue > 100) {
+      setError('Percentage cannot exceed 100%')
+      return
+    }
+
+    setSettingAlert(true)
+    setError('')
+
+    const selectedItemIds = Array.from(selectedIds)
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < selectedItemIds.length; i++) {
+      const itemId = selectedItemIds[i]
+      setAlertProgress(`Setting alert ${i + 1}/${selectedItemIds.length}`)
+
+      try {
+        let threshold: number
+        if (alertMode === 'fixed') {
+          threshold = numValue
+        } else {
+          // Percentage below current price
+          const item = items.find(it => it.id === itemId)
+          if (item && item.current_price > 0) {
+            threshold = Math.round(item.current_price * (1 - numValue / 100) * 100) / 100
+          } else {
+            threshold = 0
+          }
+        }
+
+        const response = await fetch(`/api/items/${itemId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alert_threshold: threshold }),
+        })
+
+        if (response.ok) {
+          successCount++
+        } else {
+          failCount++
+        }
+      } catch (err) {
+        console.error('[SET ALERT] Error for item', itemId, err)
+        failCount++
+      }
+    }
+
+    setAlertProgress('')
+    setSettingAlert(false)
+    setShowAlertModal(false)
+    setAlertValue('')
+    setSelectedIds(new Set())
+    setDeleteMode(false)
+
+    if (successCount > 0) {
+      setSuccess(`Set alert price for ${successCount} item${successCount > 1 ? 's' : ''}${failCount > 0 ? `, ${failCount} failed` : ''}`)
+    } else if (failCount > 0) {
+      setError(`Failed to set alert price for ${failCount} item${failCount > 1 ? 's' : ''}`)
+    }
+
+    // Refresh the items list
+    fetchItems(search)
+  }
+
   // Toggle delete mode
   const toggleDeleteMode = () => {
     if (deleteMode) {
@@ -374,12 +589,14 @@ export default function ItemsPage() {
     setError('')
     setSuccess('')
     setImportResults(null)
+    setImportProgress('Reading file...')
 
     try {
       const formData = new FormData()
       formData.append('file', importFile)
       formData.append('amazon_domain', importDomain)
 
+      setImportProgress('Importing items to database...')
       const response = await fetch('/api/items/bulk', {
         method: 'POST',
         body: formData
@@ -391,36 +608,45 @@ export default function ItemsPage() {
         throw new Error(data.error || 'Failed to import items')
       }
 
+      // Show results immediately
       setImportResults(data.results)
+      setSuccess(`Imported ${data.summary.added} items. ${data.summary.skipped} skipped, ${data.summary.invalid} invalid.`)
+
       if (data.summary.added > 0) {
         setHasItems(true)
 
-        // Trigger scraping for all added items
+        // Scrape added items sequentially with progress updates
         const addedItems = data.results.filter((r: BulkImportResult) => r.status === 'added')
-        for (const item of addedItems) {
-          // Scrape each added item in parallel
-          fetch('/api/scrape', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              url: `https://www.amazon.${importDomain}/dp/${item.asin || item.identifier}`,
-              asin: item.asin || item.identifier,
-              domain: importDomain,
-            }),
-          }).catch(err => console.warn('[BULK IMPORT] Scrape failed for', item.identifier, err))
+        for (let i = 0; i < addedItems.length; i++) {
+          const item = addedItems[i]
+          setImportProgress(`Fetching prices: ${i + 1}/${addedItems.length} (${item.asin || item.identifier})`)
+          try {
+            await fetch('/api/scrape', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                url: `https://www.amazon.${importDomain}/dp/${item.asin || item.identifier}`,
+                asin: item.asin || item.identifier,
+                domain: importDomain,
+              }),
+            })
+          } catch (err) {
+            console.warn('[BULK IMPORT] Scrape failed for', item.identifier, err)
+          }
         }
+        setImportProgress('')
       }
-      setSuccess(`Imported ${data.summary.added} items successfully. ${data.summary.skipped} were skipped, ${data.summary.invalid} were invalid.`)
 
       // Clear the file input
       setImportFile(null)
 
-      // Refresh items after a delay to allow scraping to complete
-      setTimeout(() => fetchItems(search), 3000)
+      // Refresh items list
+      fetchItems(search)
     } catch (err: any) {
       setError(err.message || 'Failed to import items')
     } finally {
       setImporting(false)
+      setImportProgress('')
     }
   }
 
@@ -428,6 +654,32 @@ export default function ItemsPage() {
   useEffect(() => {
     fetchItems()
   }, [])
+
+  // Restore scroll position when returning from item details
+  useEffect(() => {
+    if (!loading && items.length > 0) {
+      const savedPosition = sessionStorage.getItem('itemsScrollPosition')
+      if (savedPosition) {
+        const scrollY = parseInt(savedPosition)
+        sessionStorage.removeItem('itemsScrollPosition')
+
+        // Use requestAnimationFrame to ensure DOM is painted, then scroll
+        // Multiple attempts to handle image loading affecting layout
+        const scrollToPosition = () => {
+          window.scrollTo({ top: scrollY, behavior: 'instant' })
+        }
+
+        // Immediate attempt
+        requestAnimationFrame(() => {
+          scrollToPosition()
+          // Second attempt after short delay for images
+          setTimeout(scrollToPosition, 200)
+          // Third attempt for slow-loading content
+          setTimeout(scrollToPosition, 500)
+        })
+      }
+    }
+  }, [loading, items])
 
   // Render item card
   const renderItemCard = (item: TrackedItem) => {
@@ -439,7 +691,15 @@ export default function ItemsPage() {
         className={`bg-white rounded-lg shadow overflow-hidden hover:shadow-lg transition-shadow duration-200 relative ${
           deleteMode ? 'cursor-pointer' : ''
         } ${isSelected ? 'ring-2 ring-blue-500' : ''}`}
-        onClick={() => deleteMode ? toggleSelection(item.id) : router.push(`/items/${item.id}`)}
+        onClick={() => {
+          if (deleteMode) {
+            toggleSelection(item.id)
+          } else {
+            // Save scroll position before navigating
+            sessionStorage.setItem('itemsScrollPosition', window.scrollY.toString())
+            router.push(`/items/${item.id}`)
+          }
+        }}
       >
         {/* Checkbox overlay in delete mode */}
         {deleteMode && (
@@ -461,7 +721,8 @@ export default function ItemsPage() {
         )}
         <div className="p-4">
           <h4 className="font-medium text-gray-900 line-clamp-2">{item.title}</h4>
-          <p className="text-sm text-gray-500 mt-1">{item.asin}</p>
+          {item.brand && <p className="text-sm text-gray-600 mt-1">by {item.brand}</p>}
+          <p className="text-xs text-gray-400 mt-1">{item.asin}</p>
           <div className="mt-4 flex justify-between items-baseline">
             <div>
               <p className="text-2xl font-bold text-gray-900">${item.current_price.toFixed(2)}</p>
@@ -518,20 +779,20 @@ export default function ItemsPage() {
               <span className="text-sm text-gray-500">({categoryItems.length})</span>
             </button>
 
-            {/* Select All / Deselect All - always visible in delete mode */}
-            {deleteMode && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => allSelected ? deselectCategory(category) : selectCategory(category)}
-                  className="text-sm px-3 py-1 rounded-md border border-gray-300 hover:bg-gray-50 text-gray-700"
-                >
-                  {allSelected ? 'Deselect All' : 'Select All'}
-                </button>
+            {/* Select All / Deselect All - always visible */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => allSelected && deleteMode ? deselectCategory(category) : selectCategory(category)}
+                className="text-sm px-3 py-1 rounded-md border border-gray-300 hover:bg-gray-50 text-gray-700"
+              >
+                {allSelected && deleteMode ? 'Deselect All' : 'Select All'}
+              </button>
+              {deleteMode && someSelected && (
                 <span className="text-sm text-gray-500">
                   {categoryItems.filter(i => selectedIds.has(i.id)).length} / {categoryItems.length}
                 </span>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
         {!isCollapsed && (
@@ -661,6 +922,14 @@ export default function ItemsPage() {
               </button>
             </div>
 
+            {/* Progress indicator */}
+            {importProgress && (
+              <div className="flex items-center gap-2 text-sm text-blue-600">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                <span>{importProgress}</span>
+              </div>
+            )}
+
             {/* Import Results */}
             {importResults && importResults.length > 0 && (
               <div className="mt-4 border rounded-md overflow-hidden">
@@ -750,10 +1019,12 @@ export default function ItemsPage() {
                 onChange={(e) => setSortBy(e.target.value as SortOption)}
                 className="px-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
               >
-                <option value="newest">Sort: Newest</option>
+                <option value="newest">Date: Newest First</option>
+                <option value="oldest">Date: Oldest First</option>
                 <option value="price-low">Price: Low to High</option>
                 <option value="price-high">Price: High to Low</option>
-                <option value="name">Name: A to Z</option>
+                <option value="name-asc">Name: A to Z</option>
+                <option value="name-desc">Name: Z to A</option>
               </select>
             </div>
           </div>
@@ -776,38 +1047,109 @@ export default function ItemsPage() {
         </div>
       ) : (
         <div>
-          {/* Action buttons - show when user has items */}
-          <div className="mb-4 flex justify-between items-center">
-              <button
-                onClick={toggleDeleteMode}
-                className={`text-sm px-4 py-2 rounded-md border transition-colors ${
-                  deleteMode
-                    ? 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100'
-                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                {deleteMode ? 'Cancel Selection' : 'Select Items to Delete'}
-              </button>
-
-              <div className="flex gap-3">
-                {deleteMode && selectedIds.size > 0 && (
-                  <button
-                    onClick={deleteSelected}
-                    className="text-sm px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
-                  >
-                    Delete {selectedIds.size} Selected
-                  </button>
-                )}
+          {/* Selection action bar - prominent when items are selected */}
+          {deleteMode && selectedIds.size > 0 && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-300 rounded-lg">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-blue-700">
+                    {selectedIds.size} item{selectedIds.size > 1 ? 's' : ''} selected
+                  </span>
+                  {(refreshingSelected && refreshProgress) && (
+                    <span className="text-sm text-blue-600 flex items-center gap-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                      {refreshProgress}
+                    </span>
+                  )}
+                  {(assigningCategory && categoryProgress) && (
+                    <span className="text-sm text-green-600 flex items-center gap-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
+                      {categoryProgress}
+                    </span>
+                  )}
+                  {(settingAlert && alertProgress) && (
+                    <span className="text-sm text-orange-600 flex items-center gap-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-orange-600"></div>
+                      {alertProgress}
+                    </span>
+                  )}
+                </div>
                 <button
-                  onClick={toggleAllSections}
-                  className="text-sm text-blue-600 hover:text-blue-700"
+                  onClick={toggleDeleteMode}
+                  disabled={refreshingSelected || assigningCategory || settingAlert}
+                  className="text-sm px-4 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  {collapsedSections.size === Object.keys(groupedItems).filter(c => groupedItems[c].length > 0).length
-                    ? 'Expand All'
-                    : 'Collapse All'}
+                  Cancel
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-3 mt-3">
+                {/* Category assignment buttons */}
+                <div className="flex items-center gap-2 border-r border-blue-200 pr-3">
+                  <span className="text-sm text-gray-600">Set category:</span>
+                  <button
+                    onClick={() => setCategoryForSelected('Book')}
+                    disabled={refreshingSelected || assigningCategory || settingAlert}
+                    className="text-sm px-3 py-1.5 bg-amber-100 text-amber-800 border border-amber-300 rounded-md hover:bg-amber-200 disabled:opacity-50"
+                  >
+                    📚 Book
+                  </button>
+                  <button
+                    onClick={() => setCategoryForSelected('Non-Book')}
+                    disabled={refreshingSelected || assigningCategory || settingAlert}
+                    className="text-sm px-3 py-1.5 bg-purple-100 text-purple-800 border border-purple-300 rounded-md hover:bg-purple-200 disabled:opacity-50"
+                  >
+                    📦 Non-Book
+                  </button>
+                </div>
+                {/* Set Alert Price button */}
+                <button
+                  onClick={() => setShowAlertModal(true)}
+                  disabled={refreshingSelected || assigningCategory || settingAlert}
+                  className="text-sm px-4 py-1.5 bg-orange-500 text-white rounded-md hover:bg-orange-600 disabled:opacity-50"
+                >
+                  Set Alert Price
+                </button>
+                {/* Refresh button */}
+                <button
+                  onClick={refreshSelected}
+                  disabled={refreshingSelected || assigningCategory || settingAlert}
+                  className="text-sm px-4 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {refreshingSelected ? 'Refreshing...' : 'Refresh Prices'}
+                </button>
+                {/* Delete button */}
+                <button
+                  onClick={deleteSelected}
+                  disabled={refreshingSelected || assigningCategory || settingAlert}
+                  className="text-sm px-4 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"
+                >
+                  Delete Selected
                 </button>
               </div>
             </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="mb-4 flex justify-between items-center">
+            {deleteMode ? (
+              <button
+                onClick={toggleDeleteMode}
+                className="text-sm px-4 py-2 rounded-md border bg-red-50 border-red-300 text-red-700 hover:bg-red-100 transition-colors"
+              >
+                Cancel Selection
+              </button>
+            ) : (
+              <div></div>
+            )}
+            <button
+              onClick={toggleAllSections}
+              className="text-sm text-blue-600 hover:text-blue-700"
+            >
+              {collapsedSections.size === Object.keys(groupedItems).filter(c => groupedItems[c].length > 0).length
+                ? 'Expand All'
+                : 'Collapse All'}
+            </button>
+          </div>
 
           {/* Category sections */}
           {Object.entries(groupedItems)
@@ -830,6 +1172,97 @@ export default function ItemsPage() {
               <p className="text-gray-500">No items match your search or filter criteria.</p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Bulk Set Alert Price Modal */}
+      {showAlertModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50" onClick={() => !settingAlert && setShowAlertModal(false)} />
+          <div className="relative bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-1">Set Alert Price</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Apply to {selectedIds.size} selected item{selectedIds.size > 1 ? 's' : ''}
+            </p>
+
+            {/* Mode toggle */}
+            <div className="flex rounded-md border border-gray-300 mb-4 overflow-hidden">
+              <button
+                onClick={() => setAlertMode('percent')}
+                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                  alertMode === 'percent'
+                    ? 'bg-orange-500 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                % Below Current
+              </button>
+              <button
+                onClick={() => setAlertMode('fixed')}
+                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                  alertMode === 'fixed'
+                    ? 'bg-orange-500 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                Fixed Price ($)
+              </button>
+            </div>
+
+            {/* Value input */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {alertMode === 'percent' ? 'Percentage below current price' : 'Alert price ($)'}
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                  {alertMode === 'percent' ? '%' : '$'}
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  max={alertMode === 'percent' ? '100' : undefined}
+                  step={alertMode === 'percent' ? '1' : '0.01'}
+                  value={alertValue}
+                  onChange={(e) => setAlertValue(e.target.value)}
+                  placeholder={alertMode === 'percent' ? 'e.g. 10' : 'e.g. 29.99'}
+                  className="w-full pl-8 pr-4 py-2 border border-gray-300 rounded-md focus:ring-orange-500 focus:border-orange-500 text-gray-900"
+                  autoFocus
+                />
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                {alertMode === 'percent'
+                  ? 'Each item\'s alert will be set to this % below its current price'
+                  : 'All selected items will have the same fixed alert price'}
+              </p>
+            </div>
+
+            {/* Progress */}
+            {settingAlert && alertProgress && (
+              <div className="mb-4 flex items-center gap-2 text-sm text-orange-600">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-orange-600"></div>
+                <span>{alertProgress}</span>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => { setShowAlertModal(false); setAlertValue('') }}
+                disabled={settingAlert}
+                className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={setAlertForSelected}
+                disabled={settingAlert || !alertValue}
+                className="px-4 py-2 text-sm bg-orange-500 text-white rounded-md hover:bg-orange-600 disabled:opacity-50"
+              >
+                {settingAlert ? 'Applying...' : 'Apply'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

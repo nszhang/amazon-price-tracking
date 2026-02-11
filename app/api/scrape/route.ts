@@ -8,8 +8,10 @@ import { ItemsService } from '@/lib/services/database/items-service'
 import { PriceHistoryService } from '@/lib/services/database/price-history-service'
 
 export async function POST(request: NextRequest) {
+  console.log('[SCRAPE] POST /api/scrape called')
   try {
     const { url, asin, domain } = await request.json()
+    console.log(`[SCRAPE] Input: asin=${asin}, domain=${domain}`)
 
     if (!url || !asin) {
       return NextResponse.json(
@@ -28,8 +30,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Build the Amazon URL
+    // Build the Amazon URL using ASIN (ISBN-10 for books)
     const amazonUrl = `https://www.amazon.${domain}/dp/${asin}`
+    console.log(`[SCRAPE] Fetching: ${amazonUrl} for ASIN: ${asin}`)
 
     // Simple request without cookies to avoid session-based pricing differences
     const response = await fetch(amazonUrl, {
@@ -51,10 +54,13 @@ export async function POST(request: NextRequest) {
       signal: AbortSignal.timeout(15000),
     })
 
+    console.log(`[SCRAPE] Response status: ${response.status}`)
+
     // Check if we got a CAPTCHA page
     const responseText = await response.text()
+    console.log(`[SCRAPE] Response length: ${responseText.length} chars`)
     if (responseText.includes('validateCaptcha') || responseText.includes('opfcaptcha')) {
-      console.error('Amazon CAPTCHA detected - scraping is being blocked')
+      console.error('[SCRAPE] Amazon CAPTCHA detected')
       return NextResponse.json(
         { error: 'Amazon is blocking automated requests (CAPTCHA). Consider using PA-API or a paid scraping service.' },
         { status: 429 }
@@ -62,6 +68,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!response.ok) {
+      console.error(`[SCRAPE] HTTP error: ${response.status}`)
       return NextResponse.json(
         { error: `Failed to fetch page: ${response.status}` },
         { status: 500 }
@@ -70,12 +77,28 @@ export async function POST(request: NextRequest) {
 
     const html = responseText
 
+    // Decode HTML entities (e.g. &amp; &#39; &eacute;)
+    const decodeEntities = (str: string): string => {
+      const entities: Record<string, string> = {
+        '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'",
+        '&eacute;': 'é', '&egrave;': 'è', '&ecirc;': 'ê', '&euml;': 'ë',
+        '&agrave;': 'à', '&aacute;': 'á', '&acirc;': 'â', '&auml;': 'ä',
+        '&ograve;': 'ò', '&oacute;': 'ó', '&ocirc;': 'ô', '&ouml;': 'ö',
+        '&ugrave;': 'ù', '&uacute;': 'ú', '&ucirc;': 'û', '&uuml;': 'ü',
+        '&ccedil;': 'ç', '&ntilde;': 'ñ', '&nbsp;': ' ', '&ndash;': '–', '&mdash;': '—',
+      }
+      return str
+        .replace(/&[a-z]+;/gi, m => entities[m.toLowerCase()] || m)
+        .replace(/&#(\d+);?/g, (_, n) => String.fromCharCode(parseInt(n)))
+        .replace(/&#x([0-9a-f]+);?/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    }
+
     // Parse the HTML to extract product data
     // Note: Amazon's HTML structure changes frequently, so selectors may break
     const extractProductData = (html: string) => {
       // Title
       const titleMatch = html.match(/<span id="productTitle"[^>]*>(.+?)<\/span>/s)
-      const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'Unknown Product'
+      const title = titleMatch ? decodeEntities(titleMatch[1].replace(/<[^>]+>/g, '').trim()) : 'Unknown Product'
 
       // Currency detection
       let currency = 'USD'
@@ -298,13 +321,30 @@ export async function POST(request: NextRequest) {
         console.log(`[SCRAPING] ${asin}: Prime=$${primePrice}, Regular=$${newPrice} (using ${priceSource})`)
       }
 
-      // Image
-      const imageMatch = html.match(/<img id="landingImage"[^>]*src="([^"]+)"/)
-      const image = imageMatch ? imageMatch[1] : null
+      // Image - try data-a-dynamic-image first (lazy-loaded), then src
+      let image: string | null = null
+      const dynamicImageMatch = html.match(/id="landingImage"[^>]*data-a-dynamic-image="[^"]*?(https:\/\/m\.media-amazon\.com\/images\/[^&"]+)/)
+      if (dynamicImageMatch) {
+        image = dynamicImageMatch[1].replace(/&amp;/g, '&')
+      } else {
+        const srcImageMatch = html.match(/<img[^>]*id="landingImage"[^>]*src="([^"]+)"/)
+        image = srcImageMatch ? srcImageMatch[1] : null
+      }
 
-      // Brand
-      const brandMatch = html.match(/<a id="bylineInfo"[^>]*>(.+?)<\/a>/s)
-      const brand = brandMatch ? brandMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : null
+      // Brand / Author - try bylineInfo section with author spans first
+      let brand: string | null = null
+      const bylineSection = html.match(/id="bylineInfo"[^>]*>([\s\S]{1,5000}?)<\/div>/)
+      if (bylineSection) {
+        const authorLinks = [...bylineSection[1].matchAll(/<span[^>]*class="author[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/g)]
+        if (authorLinks.length > 0) {
+          brand = decodeEntities(authorLinks.map(m => m[1].trim()).join(', '))
+        }
+      }
+      // Fallback: <a id="bylineInfo"> (non-book products)
+      if (!brand) {
+        const brandMatch = html.match(/<a id="bylineInfo"[^>]*>(.+?)<\/a>/s)
+        brand = brandMatch ? decodeEntities(brandMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()) : null
+      }
 
       // Availability
       const availabilityMatch = html.match(/<span id="availability"[^>]*>(.+?)<\/span>/s)
@@ -324,6 +364,7 @@ export async function POST(request: NextRequest) {
     }
 
     const product = extractProductData(html)
+    console.log(`[SCRAPE] Extracted: title="${product.title}", price=${product.price}, brand="${product.brand}", image=${product.image_url ? 'yes' : 'no'}`)
 
     // Convert Amazon HTTP URLs to HTTPS to avoid mixed content
     const secureProduct = {
@@ -331,8 +372,9 @@ export async function POST(request: NextRequest) {
       image_url: product.image_url ? product.image_url.replace(/^http:/, 'https:') : undefined,
     }
 
-    // Get the item first to find its ID
+    // Get the item to find its ID
     const item = await ItemsService.getItemByAsin(asin, session.user.id)
+    console.log(`[SCRAPE] Item lookup: ${item ? `found id=${item.id}` : 'NOT FOUND'}`)
     if (!item) {
       return NextResponse.json(
         { error: 'Item not found' },

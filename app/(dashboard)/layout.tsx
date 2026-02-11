@@ -15,6 +15,7 @@ export default function DashboardLayout({
             <nav className="flex space-x-4">
               <a href="/dashboard" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Dashboard</a>
               <a href="/items" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Items</a>
+              <a href="/price-movers" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Price Movers</a>
               <a href="/alerts" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Alerts</a>
               <a href="/settings" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Settings</a>
             </nav>

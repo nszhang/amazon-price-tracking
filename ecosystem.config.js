@@ -1,1 +1,1 @@
-module.exports = { apps: [{ name: "amazon-price-tracking", script: "npm", args: "start", cwd: "/home/nzhang/amazon-price-tracking", instances: 1, autorestart: true, watch: false, max_memory_restart: "1G", env: { NODE_ENV: "production", PORT: 3000 } }] }
+module.exports = { apps: [{ name: "amazon-price-tracking", script: "node_modules/.bin/next", args: "start", cwd: "/home/nzhang/amazon-price-tracking", exec_mode: "fork", instances: 1, autorestart: true, watch: false, max_memory_restart: "1G", env: { NODE_ENV: "production", PORT: 3000 } }] }
