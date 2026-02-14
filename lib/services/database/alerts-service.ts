@@ -173,12 +173,13 @@ export class AlertsService {
    */
   static async getUnprocessedAlerts(limit: number = 50): Promise<PriceAlert[]> {
     const result = await query(
-      `SELECT 
+      `SELECT
         pa.id, pa.user_id, pa.item_id, pa.threshold_price, pa.actual_price,
         pa.price_drop_percent, pa.previous_price, pa.status, pa.email_sent_at,
         pa.email_sent_to, pa.email_status, pa.triggered_at, pa.acknowledged_at,
         pa.created_at,
-        ti.title as item_title, ti.asin as item_asin, ti.amazon_url as item_url
+        ti.title as item_title, ti.asin as item_asin, ti.amazon_url as item_url,
+        ti.image_url as item_image_url, ti.currency as item_currency
        FROM price_alerts pa
        JOIN tracked_items ti ON pa.item_id = ti.id
        WHERE pa.status = 'active' AND pa.email_sent_at IS NULL
@@ -237,6 +238,8 @@ export class AlertsService {
         title: row.item_title,
         asin: row.item_asin,
         amazon_url: row.item_url,
+        image_url: row.item_image_url,
+        currency: row.item_currency || 'USD',
       } as any,
     }
   }

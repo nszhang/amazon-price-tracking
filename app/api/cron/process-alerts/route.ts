@@ -6,6 +6,14 @@ import { EmailService } from '@/lib/services/email/email-service'
 import { AlertsService } from '@/lib/services/database/alerts-service'
 
 export async function GET(request: NextRequest) {
+  return handleProcessAlerts(request)
+}
+
+export async function POST(request: NextRequest) {
+  return handleProcessAlerts(request)
+}
+
+async function handleProcessAlerts(request: NextRequest) {
   // Verify cron secret for security
   const authHeader = request.headers.get('authorization')
   const cronSecret = process.env.CRON_SECRET
@@ -39,10 +47,16 @@ export async function GET(request: NextRequest) {
     // Process each alert
     for (const alert of alerts) {
       try {
+        // Get user's email for recording
+        const profile = await import('@/lib/services/database/profiles-service').then(m => m.ProfilesService.getProfile(alert.user_id))
+        const recipientEmail = profile?.alert_email || profile?.email || 'unknown'
+
         const success = await EmailService.sendPriceAlert(alert as any)
         if (success) {
+          await AlertsService.markEmailSent(alert.id, recipientEmail, 'sent')
           successCount++
         } else {
+          await AlertsService.markEmailSent(alert.id, recipientEmail, 'failed')
           failCount++
         }
       } catch (error) {
