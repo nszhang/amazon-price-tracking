@@ -272,9 +272,7 @@ export default function SettingsPage() {
           </div>
         </form>
 
-        {/* Danger Zone */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Danger Zone</h3>
           <button
             onClick={handleSignOut}
             className="px-4 py-2 border border-red-300 text-red-700 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20"
