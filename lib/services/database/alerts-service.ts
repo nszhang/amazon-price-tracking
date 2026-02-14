@@ -182,7 +182,7 @@ export class AlertsService {
         ti.image_url as item_image_url, ti.currency as item_currency
        FROM price_alerts pa
        JOIN tracked_items ti ON pa.item_id = ti.id
-       WHERE pa.status = 'active' AND pa.email_sent_at IS NULL
+       WHERE pa.status = 'active' AND pa.email_sent_at IS NULL AND pa.actual_price > 0
        ORDER BY pa.triggered_at ASC
        LIMIT $1`,
       [limit]
