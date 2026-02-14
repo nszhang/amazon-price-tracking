@@ -16,6 +16,7 @@ export default function DashboardLayout({
               <a href="/dashboard" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Dashboard</a>
               <a href="/items" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Items</a>
               <a href="/price-movers" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Price Movers</a>
+              <a href="/daily-changes" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">24h Changes</a>
               <a href="/alerts" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Alerts</a>
               <a href="/settings" className="text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Settings</a>
             </nav>
