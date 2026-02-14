@@ -44,7 +44,7 @@ async function handleProcessAlerts(request: NextRequest) {
     let successCount = 0
     let failCount = 0
 
-    // Process each alert
+    // Process each alert with rate limiting (Resend allows 2 req/sec)
     for (const alert of alerts) {
       try {
         // Get user's email for recording
@@ -56,9 +56,12 @@ async function handleProcessAlerts(request: NextRequest) {
           await AlertsService.markEmailSent(alert.id, recipientEmail, 'sent')
           successCount++
         } else {
-          await AlertsService.markEmailSent(alert.id, recipientEmail, 'failed')
+          // Don't mark failed emails so they can be retried
           failCount++
         }
+
+        // Rate limit: wait 600ms between emails to stay under 2/sec
+        await new Promise(resolve => setTimeout(resolve, 600))
       } catch (error) {
         console.error(`Failed to process alert ${alert.id}:`, error)
         failCount++
