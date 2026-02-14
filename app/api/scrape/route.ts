@@ -152,15 +152,14 @@ export async function POST(request: NextRequest) {
         return match ? parseFloat(match[1].replace(/,/g, '')) : 0
       }
 
-      // === Primary: Extract from buying option accordion rows ===
-      // Amazon wraps prices in accordion rows with data-csa-c-buying-option-type
-      // PRIME_SAVINGS_UPSELL = Prime-exclusive price (preferred)
-      // NEW = regular buy price for all customers
-      // For each match, look forward up to 20000 chars for the first a-offscreen price
+      // === Primary: Extract Prime price from buying option accordion ===
+      // Only capture PRIME prices - skip third-party seller prices
+      // PRIME_SAVINGS_UPSELL = Prime-exclusive deal price
+      // NEW with Prime badge = Regular Amazon Prime price
       const buyingOptionPattern = /data-csa-c-buying-option-type=["'](PRIME_SAVINGS_UPSELL|NEW)["']/g
       let optionMatch
       let primePrice = 0
-      let newPrice = 0
+      let newPrimePrice = 0
 
       while ((optionMatch = buyingOptionPattern.exec(html)) !== null) {
         const optionType = optionMatch[1]
@@ -170,155 +169,93 @@ export async function POST(request: NextRequest) {
         if (optionPrice > 0) {
           if (optionType === 'PRIME_SAVINGS_UPSELL' && primePrice === 0) {
             primePrice = optionPrice
-            console.log(`[SCRAPING] ${asin}: Prime price (PRIME_SAVINGS_UPSELL) = ${primePrice}`)
-          } else if (optionType === 'NEW' && newPrice === 0) {
-            newPrice = optionPrice
-            console.log(`[SCRAPING] ${asin}: Regular price (NEW) = ${newPrice}`)
-          }
-        }
-      }
-
-      // Use Prime price if available, otherwise regular price
-      if (primePrice > 0) {
-        price = primePrice
-        priceSource = 'PrimeAccordion'
-      } else if (newPrice > 0) {
-        price = newPrice
-        priceSource = 'NewAccordion'
-      }
-
-      // === Fallback 0.5: aria-checked="true" slot (format variant display) ===
-      // This finds the price for the currently selected format (e.g., Paperback vs Hardcover)
-      // Must run BEFORE corePrice_feature_div which may contain list price
-      if (price === 0) {
-        const checkedIdx = html.indexOf('aria-checked="true"')
-        if (checkedIdx >= 0) {
-          // Look for aria-label price in the next 1000 characters
-          const section = html.substring(checkedIdx, checkedIdx + 1000)
-          const ariaLabelPrice = section.match(/aria-label=["']\$?([\d,]+\.?\d*)["']/)
-          if (ariaLabelPrice) {
-            const slotPrice = parseFloat(ariaLabelPrice[1].replace(/,/g, ''))
-            if (slotPrice > 0 && slotPrice < 1000) {
-              price = slotPrice
-              priceSource = 'SlotPriceChecked'
-              console.log(`[SCRAPING] ${asin}: Fallback 0.5 (aria-checked slot) = ${price}`)
+            console.log(`[SCRAPING] ${asin}: Prime deal price (PRIME_SAVINGS_UPSELL) = ${primePrice}`)
+          } else if (optionType === 'NEW' && newPrimePrice === 0) {
+            // Check if this NEW option has Prime badge (within the section)
+            const hasPrime = /class=["'][^"']*a-icon-prime[^"']*["']|i-prime|prime-logo|>prime<|vprime/i.test(section)
+            if (hasPrime) {
+              newPrimePrice = optionPrice
+              console.log(`[SCRAPING] ${asin}: Prime price (NEW with Prime badge) = ${newPrimePrice}`)
+            } else {
+              console.log(`[SCRAPING] ${asin}: Skipping non-Prime NEW price = ${optionPrice}`)
             }
           }
         }
       }
 
-      // === Fallback 1: corePrice_feature_div (when no accordion structure) ===
+      // Only use Prime prices
+      if (primePrice > 0) {
+        price = primePrice
+        priceSource = 'PrimeAccordion'
+      } else if (newPrimePrice > 0) {
+        price = newPrimePrice
+        priceSource = 'NewPrimeAccordion'
+      }
+
+      // === Fallback 0.5: aria-checked="true" slot with Prime badge ===
+      // Format variant (Paperback/Hardcover) - only if it has Prime
       if (price === 0) {
-        const corePriceMatch = html.match(/id=["']corePrice_feature_div["'][^>]*>([\s\S]{1,5000})/)
+        const checkedIdx = html.indexOf('aria-checked="true"')
+        if (checkedIdx >= 0) {
+          const section = html.substring(checkedIdx, checkedIdx + 2000)
+          // Check for Prime badge in the selected format
+          const hasPrime = /class=["'][^"']*a-icon-prime[^"']*["']|i-prime|prime-logo|>prime<|vprime/i.test(section)
+          if (hasPrime) {
+            const ariaLabelPrice = section.match(/aria-label=["']\$?([\d,]+\.?\d*)["']/)
+            if (ariaLabelPrice) {
+              const slotPrice = parseFloat(ariaLabelPrice[1].replace(/,/g, ''))
+              if (slotPrice > 0 && slotPrice < 1000) {
+                price = slotPrice
+                priceSource = 'SlotPriceCheckedPrime'
+                console.log(`[SCRAPING] ${asin}: Fallback 0.5 (aria-checked slot with Prime) = ${price}`)
+              }
+            }
+          }
+        }
+      }
+
+      // === Fallback 1: corePrice_feature_div (only if Prime is present nearby) ===
+      if (price === 0) {
+        const corePriceMatch = html.match(/id=["']corePrice_feature_div["'][^>]*>([\s\S]{1,8000})/)
         if (corePriceMatch) {
           const corePriceSection = corePriceMatch[1]
-          const corePrice = extractOffscreenPrice(corePriceSection)
-          if (corePrice > 0) {
-            price = corePrice
-            priceSource = 'CorePrice'
-            console.log(`[SCRAPING] ${asin}: Fallback 1 (corePrice_feature_div) = ${price}`)
+          // Only use if Prime badge is present in the section
+          const hasPrime = /class=["'][^"']*a-icon-prime[^"']*["']|i-prime|prime-logo|>prime<|vprime/i.test(corePriceSection)
+          if (hasPrime) {
+            const corePrice = extractOffscreenPrice(corePriceSection)
+            if (corePrice > 0) {
+              price = corePrice
+              priceSource = 'CorePricePrime'
+              console.log(`[SCRAPING] ${asin}: Fallback 1 (corePrice with Prime) = ${price}`)
+            }
           }
         }
       }
 
-      // === Fallback 2: twister-plus-price-data-price (variant products) ===
+      // === Fallback 2: apex-price-to-pay (only if Prime is present) ===
       if (price === 0) {
-        const twisterPriceMatch = html.match(/id=["']twister-plus-price-data-price["'][^>]*value=["']([\d,]+\.?\d*)["']/)
-        if (twisterPriceMatch) {
-          const twisterPrice = parseFloat(twisterPriceMatch[1].replace(/,/g, ''))
-          if (twisterPrice > 0) {
-            price = twisterPrice
-            priceSource = 'TwisterPriceData'
-            console.log(`[SCRAPING] ${asin}: Fallback 2 (twister-plus-price-data-price) = ${price}`)
+        // Look for apex price section with Prime badge
+        const apexSectionMatch = html.match(/class=["']apex[^"']*price[^"']*["'][^>]*>([\s\S]{1,5000})/i)
+        if (apexSectionMatch) {
+          const hasPrime = /class=["'][^"']*a-icon-prime[^"']*["']|i-prime|prime-logo|>prime<|vprime/i.test(apexSectionMatch[1])
+          if (hasPrime) {
+            const apexPrice = extractOffscreenPrice(apexSectionMatch[1])
+            if (apexPrice > 0) {
+              price = apexPrice
+              priceSource = 'ApexPricePrime'
+              console.log(`[SCRAPING] ${asin}: Fallback 2 (apex price with Prime) = ${price}`)
+            }
           }
         }
       }
 
-      // === Fallback 3: Twister section a-offscreen (size/color variant display) ===
-      if (price === 0) {
-        const twisterSectionMatch = html.match(/id=["']twister[^"']*["'][^>]*>(.{10,5000})/s)
-        if (twisterSectionMatch) {
-          const twisterPrice = extractOffscreenPrice(twisterSectionMatch[1])
-          if (twisterPrice > 0) {
-            price = twisterPrice
-            priceSource = 'TwisterSection'
-            console.log(`[SCRAPING] ${asin}: Fallback 3 (TwisterSection) = ${price}`)
-          }
-        }
-      }
+      // No more fallbacks - we only want Prime prices
+      // If no Prime price found, price stays 0 and existing price will be kept
 
-      // === Fallback 4: priceblock_dealprice (deal/promo) ===
-      if (price === 0) {
-        const dealPriceMatch = html.match(/id=["']priceblock_dealprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-        if (dealPriceMatch) {
-          price = parseFloat(dealPriceMatch[1].replace(/,/g, ''))
-          priceSource = 'DealPrice'
-        }
-      }
-
-      // === Fallback 5: priceblock_ourprice (regular price, no deal) ===
-      if (price === 0) {
-        const ourPriceMatch = html.match(/id=["']priceblock_ourprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-        if (ourPriceMatch) {
-          price = parseFloat(ourPriceMatch[1].replace(/,/g, ''))
-          priceSource = 'OurPrice'
-        }
-      }
-
-      // === Fallback 6: apex-price-to-pay ===
-      if (price === 0) {
-        const apexPriceMatch = html.match(/class=["']apex-price-to-pay[^"']*["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-        if (apexPriceMatch) {
-          price = parseFloat(apexPriceMatch[1].replace(/,/g, ''))
-          priceSource = 'ApexPrice'
-        }
-      }
-
-      // === Fallback 7: priceblock_saleprice (sale items) ===
-      if (price === 0) {
-        const salePriceMatch = html.match(/id=["']priceblock_saleprice["'][^>]*>.*?<span[^>]*class=["']a-offscreen["'][^>]*>\$?([\d,]+\.?\d*)/s)
-        if (salePriceMatch) {
-          price = parseFloat(salePriceMatch[1].replace(/,/g, ''))
-          priceSource = 'SalePrice'
-        }
-      }
-
-      // === Fallback 8: Buybox a-price-whole + a-price-fraction ===
-      if (price === 0) {
-        const priceSectionMatch = html.match(/<div[^>]*id=["']buybox[^>]*>.*?<span[^>]*class=["']a-price-whole["'][^>]*>(\d+[\d,]*)<\/span><span[^>]*class=["']a-price-fraction["'][^>]*>(\d+)<\/span>/s)
-        if (priceSectionMatch) {
-          const wholePart = parseFloat(priceSectionMatch[1].replace(/,/g, ''))
-          const fractionPart = parseFloat(`0.${priceSectionMatch[2]}`)
-          price = wholePart + fractionPart
-          priceSource = 'BuyboxWholeFraction'
-        }
-      }
-
-      // === Fallback 9: Last resort - first a-offscreen with sanity check (excluding list prices) ===
-      if (price === 0) {
-        // Find all a-offscreen prices and skip ones that are clearly list prices
-        const allOffscreenMatches = html.matchAll(/<span[^>]*class=["'][^"']*a-offscreen[^"']*["'][^>]*>\$?([\d,]+\.?\d*)<\/span>/g)
-        for (const match of allOffscreenMatches) {
-          const extractedPrice = parseFloat(match[1].replace(/,/g, ''))
-          // Check 300 characters before for "List Price:" or "basisPrice"
-          const contextBefore = html.substring(Math.max(0, match.index - 300), match.index)
-          // Skip if this is clearly a list price
-          if (/List Price:?/i.test(contextBefore) || /basisPrice/i.test(contextBefore) || /aok-offscreen.*List Price/i.test(contextBefore)) {
-            console.log(`[SCRAPING] ${asin}: Skipping list price: $${extractedPrice}`)
-            continue
-          }
-          if (extractedPrice >= 1 && extractedPrice < 10000) {
-            price = extractedPrice
-            priceSource = 'FallbackOffscreen'
-            console.log(`[SCRAPING] ${asin}: Fallback 9 (last resort a-offscreen) = ${price}`)
-            break
-          }
-        }
-      }
-
-      console.log(`[SCRAPING] ${asin}: Final price = ${price} (${currency}), source = ${priceSource}, Seller: ${seller || 'Unknown'}`)
-      if (primePrice > 0 && newPrice > 0) {
-        console.log(`[SCRAPING] ${asin}: Prime=$${primePrice}, Regular=$${newPrice} (using ${priceSource})`)
+      if (price > 0) {
+        console.log(`[SCRAPING] ${asin}: Prime price = ${price} (${currency}), source = ${priceSource}`)
+      } else {
+        console.log(`[SCRAPING] ${asin}: No Prime price found - keeping existing price`)
       }
 
       // Image - try data-a-dynamic-image first (lazy-loaded), then src
